@@ -2,6 +2,7 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
+use tempeh_control::{ControlReading, run_simulated_control};
 use tempehcore::{SimConfig, SimState, run_simulation};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -18,6 +19,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Wrote {}", out_path.display());
             println!("Open it in a browser.");
         }
+        "control" => {
+            let run = run_simulated_control(config)
+                .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
+            print_control_csv(&run.readings);
+        }
         "help" | "--help" | "-h" => print_help(),
         other => {
             eprintln!("Unknown command: {other}");
@@ -31,8 +37,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn print_help() {
     eprintln!(
-        "Usage:\n  cargo run              # write out/sim.html\n  cargo run -- html      # write out/sim.html\n  cargo run -- csv       # print CSV"
+        "Usage:\n  cargo run              # write out/sim.html\n  cargo run -- html      # write out/sim.html\n  cargo run -- csv       # print simulation CSV\n  cargo run -- control   # print simulated control-loop CSV"
     );
+}
+
+fn print_control_csv(readings: &[ControlReading]) {
+    println!("{}", ControlReading::csv_header());
+    for reading in readings {
+        println!("{}", reading.csv_row());
+    }
 }
 
 fn print_csv(samples: &[SimState]) {

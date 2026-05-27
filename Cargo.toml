@@ -5,6 +5,10 @@ edition = "2024"
 
 [dependencies]
 tempehcore = { path = "crates/tempehcore" }
+tempeh-control = { path = "crates/tempeh-control" }
 
 [workspace]
-members = ["crates/tempehcore"]
+members = [
+    "crates/tempehcore",
+    "crates/tempeh-control",
+]

@@ -3,9 +3,17 @@
 version = 4
 
 [[package]]
+name = "tempeh-control"
+version = "0.1.0"
+dependencies = [
+ "tempehcore",
+]
+
+[[package]]
 name = "tempeh-os"
 version = "0.1.0"
 dependencies = [
+ "tempeh-control",
  "tempehcore",
 ]
 

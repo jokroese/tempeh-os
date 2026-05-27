@@ -15,6 +15,12 @@ open out/sim.html
 cargo run -- csv
 ```
 
+## Simulated control loop
+
+```bash
+cargo run -- control
+```
+
 ## Test
 
 ```bash
