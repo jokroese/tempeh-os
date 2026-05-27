@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 tempeh-model = { path = "../tempeh-model" }
 tempeh-sim = { path = "../tempeh-sim" }
+ureq = "2"

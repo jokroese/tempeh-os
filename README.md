@@ -28,6 +28,14 @@ cargo run -- csv
 cargo run -- control
 ```
 
+## Tasmota plug test
+
+`plug-test` checks that the plug responds: on, wait two seconds, off.
+
+```bash
+cargo run -- plug-test http://192.168.8.193
+```
+
 ## Test
 
 ```bash

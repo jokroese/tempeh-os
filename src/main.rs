@@ -2,7 +2,7 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
-use tempeh_control::{ControlReading, Controller, run_trace_control};
+use tempeh_control::{ControlReading, Controller, Heater, TasmotaHeater, run_trace_control};
 use tempeh_model::EnvironmentState;
 use tempeh_sim::{SimConfig, Simulator, TemperatureTrace};
 
@@ -26,6 +26,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
             print_control_csv(&run.readings);
         }
+        "plug-test" => {
+            run_plug_test(env::args().nth(2))?;
+        }
         "help" | "--help" | "-h" => print_help(),
         other => {
             eprintln!("Unknown command: {other}");
@@ -39,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn print_help() {
     eprintln!(
-        "Usage:\n  cargo run              # write out/sim.html\n  cargo run -- html      # write out/sim.html\n  cargo run -- csv       # print simulation CSV\n  cargo run -- control   # print simulated control-loop CSV"
+        "Usage:\n  cargo run                         # write out/sim.html\n  cargo run -- html                 # write out/sim.html\n  cargo run -- csv                  # print simulation CSV\n  cargo run -- control              # print simulated control-loop CSV\n  cargo run -- plug-test <url>      # turn Tasmota plug on, wait, turn off\n\nEnvironment:\n  TEMPEH_TASMOTA_URL=http://192.168.1.50"
     );
 }
 
@@ -509,4 +512,33 @@ fn run_closed_loop_simulation(config: SimConfig) -> Vec<EnvironmentState> {
         samples.push(simulator.step(heater_on));
     }
     samples
+}
+
+fn tasmota_base_url(url_arg: Option<String>) -> Result<String, std::io::Error> {
+    url_arg
+        .or_else(|| env::var("TEMPEH_TASMOTA_URL").ok())
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "provide a Tasmota URL, e.g. cargo run -- plug-test http://192.168.1.50",
+            )
+        })
+}
+
+fn run_plug_test(url_arg: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+    let base_url = tasmota_base_url(url_arg)?;
+    let mut heater = TasmotaHeater::new(base_url);
+
+    eprintln!("Turning plug on");
+    heater
+        .set_heater(true)
+        .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    eprintln!("Turning plug off");
+    heater
+        .set_heater(false)
+        .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
+
+    eprintln!("Plug test complete at {}", heater.base_url());
+    Ok(())
 }
