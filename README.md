@@ -2,6 +2,10 @@
 
 A project for modelling and eventually controlling a low-cost tempeh incubator.
 
+## Hardware
+
+The physical prototype is documented in `docs/hardware/`. Hardware v0 is a prototype. It uses a SAMLA storage box as the warm-air chamber, while food remains inside perforated food-contact ISTAD bags.
+
 ## Crates
 
 - `tempeh-model` owns the vocabulary.
