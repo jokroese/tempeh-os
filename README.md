@@ -36,6 +36,16 @@ cargo run -- control
 cargo run -- plug-test http://192.168.8.193
 ```
 
+`trace-control-test` checks the full controller path using fake temperature readings:
+
+```
+TemperatureTrace -> TraceThermometer -> Controller -> TasmotaHeater
+```
+
+```bash
+cargo run -- trace-control-test http://192.168.8.193
+```
+
 ## Test
 
 ```bash

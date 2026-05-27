@@ -2,7 +2,10 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
-use tempeh_control::{ControlReading, Controller, Heater, TasmotaHeater, run_trace_control};
+use tempeh_control::{
+    ControlLoop, ControlReading, Controller, Heater, TasmotaHeater, TraceThermometer,
+    run_trace_control,
+};
 use tempeh_model::EnvironmentState;
 use tempeh_sim::{SimConfig, Simulator, TemperatureTrace};
 
@@ -29,6 +32,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "plug-test" => {
             run_plug_test(env::args().nth(2))?;
         }
+        "trace-control-test" => {
+            run_trace_control_test(env::args().nth(2))?;
+        }
         "help" | "--help" | "-h" => print_help(),
         other => {
             eprintln!("Unknown command: {other}");
@@ -42,7 +48,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn print_help() {
     eprintln!(
-        "Usage:\n  cargo run                         # write out/sim.html\n  cargo run -- html                 # write out/sim.html\n  cargo run -- csv                  # print simulation CSV\n  cargo run -- control              # print simulated control-loop CSV\n  cargo run -- plug-test <url>      # turn Tasmota plug on, wait, turn off\n\nEnvironment:\n  TEMPEH_TASMOTA_URL=http://192.168.1.50"
+        "Usage:\n  cargo run                               # write out/sim.html\n  cargo run -- html                       # write out/sim.html\n  cargo run -- csv                        # print simulation CSV\n  cargo run -- control                    # print simulated control-loop CSV\n  cargo run -- plug-test <url>            # turn Tasmota plug on, wait, turn off\n  cargo run -- trace-control-test <url>   # drive Tasmota plug from a short fake temperature trace\n\nEnvironment:\n  TEMPEH_TASMOTA_URL=http://192.168.1.50"
     );
 }
 
@@ -540,5 +546,77 @@ fn run_plug_test(url_arg: Option<String>) -> Result<(), Box<dyn std::error::Erro
         .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
 
     eprintln!("Plug test complete at {}", heater.base_url());
+    Ok(())
+}
+
+fn run_trace_control_test(url_arg: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+    let base_url = tasmota_base_url(url_arg)?;
+    let config = SimConfig::default();
+
+    // This test intentionally uses fake readings. Its purpose is to verify:
+    //
+    //   TemperatureTrace -> TraceThermometer -> Controller -> TasmotaHeater
+    //
+    // The values are chosen to produce visible state transitions:
+    // - cold readings should turn the heater on
+    // - a reading above target + hysteresis should turn it off
+    // - an over-cutoff reading should keep it off
+    let trace = TemperatureTrace::new(vec![
+        20.0,
+        21.0,
+        config.controller.target_box_air_temp_c + config.controller.hysteresis_c + 1.0,
+        config.controller.hard_box_cutoff_c + 1.0,
+    ]);
+
+    let thermometer = TraceThermometer::new(trace);
+    let heater = TasmotaHeater::new(base_url);
+    let mut control = ControlLoop::new(config.controller, thermometer, heater);
+
+    // Start from a known safe state.
+    eprintln!(
+        "Sending initial off command to {}",
+        control.heater().base_url()
+    );
+    control
+        .heater_mut()
+        .set_heater(false)
+        .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
+
+    println!("{}", ControlReading::csv_header());
+
+    let result = run_trace_control_test_steps(&mut control, config.dt_s);
+
+    // Always try to leave the plug off, even if the control sequence failed.
+    let shutdown_result = control
+        .heater_mut()
+        .set_heater(false)
+        .map_err(|error| std::io::Error::other(format!("{error:?}")));
+
+    result?;
+    shutdown_result?;
+
+    eprintln!(
+        "Trace control test complete. Final command sent: off. Tested plug at {}",
+        control.heater().base_url()
+    );
+
+    Ok(())
+}
+
+fn run_trace_control_test_steps(
+    control: &mut ControlLoop<TraceThermometer, TasmotaHeater>,
+    dt_s: f32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for step in 0..4 {
+        let time_s = step as f32 * dt_s;
+        let reading = control
+            .step(time_s)
+            .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
+        println!("{}", reading.csv_row());
+
+        // Slow enough to see a lamp/plug indicator change.
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
+
     Ok(())
 }
