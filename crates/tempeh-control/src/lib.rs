@@ -1,4 +1,5 @@
-use tempehcore::{Controller, SimConfig, Simulator};
+use tempeh_model::ControllerConfig;
+use tempeh_sim::TemperatureTrace;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ThermometerError {
@@ -16,6 +17,41 @@ pub enum HeaterError {
 pub enum ControlError {
     Thermometer(ThermometerError),
     Heater(HeaterError),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Controller {
+    pub config: ControllerConfig,
+    heater_on: bool,
+}
+
+impl Controller {
+    pub fn new(config: ControllerConfig) -> Self {
+        Self {
+            config,
+            heater_on: false,
+        }
+    }
+
+    pub fn update(&mut self, box_air_temp_c: f32, tempeh_core_temp_c: f32) -> bool {
+        if box_air_temp_c >= self.config.hard_box_cutoff_c
+            || tempeh_core_temp_c >= self.config.hard_tempeh_cutoff_c
+        {
+            self.heater_on = false;
+            return self.heater_on;
+        }
+        if !self.heater_on
+            && box_air_temp_c < self.config.target_box_air_temp_c - self.config.hysteresis_c
+        {
+            self.heater_on = true;
+        }
+        if self.heater_on
+            && box_air_temp_c > self.config.target_box_air_temp_c + self.config.hysteresis_c
+        {
+            self.heater_on = false;
+        }
+        self.heater_on
+    }
 }
 
 impl From<ThermometerError> for ControlError {
@@ -77,7 +113,7 @@ where
     T: Thermometer,
     H: Heater,
 {
-    pub fn new(config: &SimConfig, thermometer: T, heater: H) -> Self {
+    pub fn new(config: ControllerConfig, thermometer: T, heater: H) -> Self {
         Self {
             controller: Controller::new(config),
             thermometer,
@@ -126,56 +162,31 @@ where
 }
 
 #[derive(Debug, Clone)]
-pub struct SimulatedThermometer {
-    samples_c: Vec<f32>,
+pub struct TraceThermometer {
+    trace: TemperatureTrace,
     index: usize,
 }
 
-impl SimulatedThermometer {
-    pub fn new(samples_c: impl Into<Vec<f32>>) -> Self {
-        Self {
-            samples_c: samples_c.into(),
-            index: 0,
-        }
-    }
-
-    pub fn from_box_air_simulation(config: SimConfig) -> Self {
-        let samples_c = Simulator::new(config)
-            .run()
-            .into_iter()
-            .map(|state| state.box_air_temp_c)
-            .collect::<Vec<_>>();
-
-        Self::new(samples_c)
-    }
-
-    pub fn from_tempeh_core_simulation(config: SimConfig) -> Self {
-        let samples_c = Simulator::new(config)
-            .run()
-            .into_iter()
-            .map(|state| state.tempeh_core_temp_c)
-            .collect::<Vec<_>>();
-
-        Self::new(samples_c)
+impl TraceThermometer {
+    pub fn new(trace: TemperatureTrace) -> Self {
+        Self { trace, index: 0 }
     }
 
     pub fn len(&self) -> usize {
-        self.samples_c.len()
+        self.trace.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.samples_c.is_empty()
+        self.trace.is_empty()
     }
 }
 
-impl Thermometer for SimulatedThermometer {
+impl Thermometer for TraceThermometer {
     fn read_celsius(&mut self) -> Result<f32, ThermometerError> {
-        if self.samples_c.is_empty() {
-            return Err(ThermometerError::Unavailable);
-        }
-
-        let index = self.index.min(self.samples_c.len() - 1);
-        let reading = self.samples_c[index];
+        let reading = self
+            .trace
+            .sample_or_last(self.index)
+            .ok_or(ThermometerError::Unavailable)?;
         self.index = self.index.saturating_add(1);
 
         if reading.is_finite() {
@@ -215,27 +226,32 @@ impl Heater for LoggingHeater {
 }
 
 #[derive(Debug, Clone)]
-pub struct SimulatedControlRun {
+pub struct ControlRun {
     pub readings: Vec<ControlReading>,
     pub heater_commands: Vec<bool>,
 }
 
-pub fn run_simulated_control(config: SimConfig) -> Result<SimulatedControlRun, ControlError> {
-    let thermometer = SimulatedThermometer::from_box_air_simulation(config);
+pub fn run_trace_control(
+    controller_config: ControllerConfig,
+    trace: TemperatureTrace,
+    dt_s: f32,
+    duration_s: f32,
+) -> Result<ControlRun, ControlError> {
+    let thermometer = TraceThermometer::new(trace);
     let heater = LoggingHeater::new();
-    let mut control = ControlLoop::new(&config, thermometer, heater);
+    let mut control = ControlLoop::new(controller_config, thermometer, heater);
 
     let mut readings = Vec::new();
     let mut time_s = 0.0;
 
-    while time_s <= config.duration_s {
+    while time_s <= duration_s {
         readings.push(control.step(time_s)?);
-        time_s += config.dt_s;
+        time_s += dt_s;
     }
 
     let heater_commands = control.heater().commands().to_vec();
 
-    Ok(SimulatedControlRun {
+    Ok(ControlRun {
         readings,
         heater_commands,
     })
@@ -244,10 +260,13 @@ pub fn run_simulated_control(config: SimConfig) -> Result<SimulatedControlRun, C
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempeh_model::EnvironmentState;
+    use tempeh_sim::SimConfig;
 
     #[test]
-    fn simulated_thermometer_returns_samples_in_order() {
-        let mut thermometer = SimulatedThermometer::new(vec![20.0, 21.5, 22.0]);
+    fn trace_thermometer_returns_samples_in_order() {
+        let trace = TemperatureTrace::new(vec![20.0, 21.5, 22.0]);
+        let mut thermometer = TraceThermometer::new(trace);
 
         assert_eq!(thermometer.read_celsius().unwrap(), 20.0);
         assert_eq!(thermometer.read_celsius().unwrap(), 21.5);
@@ -255,8 +274,9 @@ mod tests {
     }
 
     #[test]
-    fn simulated_thermometer_holds_last_sample() {
-        let mut thermometer = SimulatedThermometer::new(vec![20.0, 21.0]);
+    fn trace_thermometer_holds_last_sample() {
+        let trace = TemperatureTrace::new(vec![20.0, 21.0]);
+        let mut thermometer = TraceThermometer::new(trace);
 
         assert_eq!(thermometer.read_celsius().unwrap(), 20.0);
         assert_eq!(thermometer.read_celsius().unwrap(), 21.0);
@@ -277,10 +297,10 @@ mod tests {
 
     #[test]
     fn control_loop_turns_heater_on_when_cold() {
-        let config = SimConfig::default();
-        let thermometer = SimulatedThermometer::new(vec![20.0]);
+        let config = ControllerConfig::default();
+        let thermometer = TraceThermometer::new(TemperatureTrace::new(vec![20.0]));
         let heater = LoggingHeater::new();
-        let mut control = ControlLoop::new(&config, thermometer, heater);
+        let mut control = ControlLoop::new(config, thermometer, heater);
 
         let reading = control.step(0.0).unwrap();
 
@@ -290,13 +310,16 @@ mod tests {
 
     #[test]
     fn control_loop_turns_heater_off_at_hard_cutoff() {
-        let config = SimConfig::default();
-        let thermometer = SimulatedThermometer::new(vec![20.0, config.hard_box_cutoff_c + 0.5]);
+        let config = ControllerConfig::default();
+        let thermometer = TraceThermometer::new(TemperatureTrace::new(vec![
+            20.0,
+            config.hard_box_cutoff_c + 0.5,
+        ]));
         let heater = LoggingHeater::new();
-        let mut control = ControlLoop::new(&config, thermometer, heater);
+        let mut control = ControlLoop::new(config, thermometer, heater);
 
         let first = control.step(0.0).unwrap();
-        let second = control.step(config.dt_s).unwrap();
+        let second = control.step(10.0).unwrap();
 
         assert!(first.heater_on);
         assert!(!second.heater_on);
@@ -304,14 +327,44 @@ mod tests {
     }
 
     #[test]
-    fn simulated_control_run_produces_readings_and_commands() {
+    fn controller_turns_off_at_hard_cutoff() {
+        let config = ControllerConfig::default();
+        let mut controller = Controller::new(config);
+        assert!(controller.update(20.0, 20.0));
+        assert!(!controller.update(config.hard_box_cutoff_c + 0.1, 20.0));
+        assert!(!controller.update(20.0, config.hard_tempeh_cutoff_c + 0.1));
+    }
+
+    #[test]
+    fn trace_control_run_produces_readings_and_commands() {
         let config = SimConfig {
             duration_s: 60.0,
             dt_s: 10.0,
             ..SimConfig::default()
         };
-
-        let run = run_simulated_control(config).unwrap();
+        let states = vec![
+            EnvironmentState {
+                time_s: 0.0,
+                room_air_temp_c: 20.0,
+                box_air_temp_c: 20.0,
+                tempeh_core_temp_c: 20.0,
+                fermentation_progress: 0.0,
+                metabolic_heat_rate_c_per_s: 0.0,
+                heater_on: false,
+            },
+            EnvironmentState {
+                time_s: 10.0,
+                room_air_temp_c: 20.0,
+                box_air_temp_c: 21.0,
+                tempeh_core_temp_c: 20.5,
+                fermentation_progress: 0.0,
+                metabolic_heat_rate_c_per_s: 0.0,
+                heater_on: true,
+            },
+        ];
+        let trace = TemperatureTrace::from_box_air_states(states);
+        let run =
+            run_trace_control(config.controller, trace, config.dt_s, config.duration_s).unwrap();
 
         assert!(!run.readings.is_empty());
         assert_eq!(run.readings.len(), run.heater_commands.len());

@@ -1,8 +1,7 @@
 [package]
-name = "tempeh-control"
+name = "tempeh-sim"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
 tempeh-model = { path = "../tempeh-model" }
-tempeh-sim = { path = "../tempeh-sim" }

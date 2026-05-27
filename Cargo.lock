@@ -6,17 +6,26 @@ version = 4
 name = "tempeh-control"
 version = "0.1.0"
 dependencies = [
- "tempehcore",
+ "tempeh-model",
+ "tempeh-sim",
 ]
+
+[[package]]
+name = "tempeh-model"
+version = "0.1.0"
 
 [[package]]
 name = "tempeh-os"
 version = "0.1.0"
 dependencies = [
  "tempeh-control",
- "tempehcore",
+ "tempeh-model",
+ "tempeh-sim",
 ]
 
 [[package]]
-name = "tempehcore"
+name = "tempeh-sim"
 version = "0.1.0"
+dependencies = [
+ "tempeh-model",
+]

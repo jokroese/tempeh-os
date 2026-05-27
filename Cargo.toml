@@ -4,11 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-tempehcore = { path = "crates/tempehcore" }
+tempeh-model = { path = "crates/tempeh-model" }
+tempeh-sim = { path = "crates/tempeh-sim" }
 tempeh-control = { path = "crates/tempeh-control" }
 
 [workspace]
 members = [
-    "crates/tempehcore",
+    "crates/tempeh-model",
+    "crates/tempeh-sim",
     "crates/tempeh-control",
 ]
