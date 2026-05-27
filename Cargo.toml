@@ -4,3 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+tempehcore = { path = "crates/tempehcore" }
+
+[workspace]
+members = ["crates/tempehcore"]

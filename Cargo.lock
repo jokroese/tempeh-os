@@ -5,3 +5,10 @@ version = 4
 [[package]]
 name = "tempeh-os"
 version = "0.1.0"
+dependencies = [
+ "tempehcore",
+]
+
+[[package]]
+name = "tempehcore"
+version = "0.1.0"
