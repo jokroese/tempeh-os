@@ -50,6 +50,14 @@ TemperatureTrace -> TraceThermometer -> Controller -> TasmotaHeater
 cargo run -- trace-control-test http://192.168.8.193
 ```
 
+## Pet mode
+
+`pet` turns the latest simulation state into a mycelial status report:
+
+```bash
+cargo run -- pet
+```
+
 ## Test
 
 ```bash

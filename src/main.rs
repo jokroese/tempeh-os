@@ -7,6 +7,7 @@ use tempeh_control::{
     run_trace_control,
 };
 use tempeh_model::EnvironmentState;
+use tempeh_pet::{PetReport, report_for_samples};
 use tempeh_sim::{SimConfig, Simulator, TemperatureTrace};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -29,6 +30,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
             print_control_csv(&run.readings);
         }
+        "pet" => {
+            print_pet_report(&samples, &config);
+        }
         "plug-test" => {
             run_plug_test(env::args().nth(2))?;
         }
@@ -48,7 +52,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn print_help() {
     eprintln!(
-        "Usage:\n  cargo run                               # write out/sim.html\n  cargo run -- html                       # write out/sim.html\n  cargo run -- csv                        # print simulation CSV\n  cargo run -- control                    # print simulated control-loop CSV\n  cargo run -- plug-test <url>            # turn Tasmota plug on, wait, turn off\n  cargo run -- trace-control-test <url>   # drive Tasmota plug from a short fake temperature trace\n\nEnvironment:\n  TEMPEH_TASMOTA_URL=http://192.168.1.50"
+        "Usage:\n  cargo run                               # write out/sim.html\n  cargo run -- html                       # write out/sim.html\n  cargo run -- csv                        # print simulation CSV\n  cargo run -- control                    # print simulated control-loop CSV\n  cargo run -- pet                        # print the mycelial pet status\n  cargo run -- plug-test <url>            # turn Tasmota plug on, wait, turn off\n  cargo run -- trace-control-test <url>   # drive Tasmota plug from a short fake temperature trace\n\nEnvironment:\n  TEMPEH_TASMOTA_URL=http://192.168.1.50"
     );
 }
 
@@ -66,8 +70,39 @@ fn print_csv(samples: &[EnvironmentState]) {
     }
 }
 
+fn print_pet_report(samples: &[EnvironmentState], config: &SimConfig) {
+    let Some(report) = report_for_samples(samples, config.controller) else {
+        eprintln!("No samples available.");
+        return;
+    };
+
+    println!("🍄 Tempeh OS Pet Report");
+    println!();
+    println!("Name: Miso");
+    println!("Mood: {}", report.pet.mood.label());
+    println!("Core: {:.1} °C", report.state.tempeh_core_temp_c);
+    println!("Box: {:.1} °C", report.state.box_air_temp_c);
+    println!(
+        "Progress: {:.0}%",
+        report.state.fermentation_progress * 100.0
+    );
+    println!(
+        "Mycelium confidence: {:.0}%",
+        report.pet.mycelium_confidence * 100.0
+    );
+    println!("Safety margin: {:.1} °C", report.pet.safety_margin_c);
+    match report.pet.estimated_ready_in_s {
+        Some(seconds) => println!("Estimated ready in: {:.1} h", seconds / 3600.0),
+        None => println!("Estimated ready in: unknown"),
+    }
+    println!();
+    println!("Miso says:");
+    println!("“{}”", report.pet.message());
+}
+
 fn render_html(samples: &[EnvironmentState], config: &SimConfig) -> String {
     let final_state = samples.last().copied().unwrap_or_else(|| samples[0]);
+    let pet_report = report_for_samples(samples, config.controller);
 
     let temp_svg = render_line_chart(
         samples,
@@ -95,6 +130,8 @@ fn render_html(samples: &[EnvironmentState], config: &SimConfig) -> String {
             }),
         ],
     );
+
+    let pet_html = pet_report.as_ref().map(render_pet_card).unwrap_or_default();
 
     let heater_svg = render_heater_chart(samples, 900, 160);
 
@@ -212,6 +249,82 @@ code {{
   padding: 2px 5px;
   border-radius: 6px;
 }}
+.pet {{
+  display: grid;
+  grid-template-columns: minmax(120px, 180px) 1fr;
+  gap: 18px;
+  align-items: center;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  padding: 18px;
+  margin: 24px 0;
+}}
+.pet h2 {{
+  margin: 0 0 8px;
+}}
+.pet .speech {{
+  color: var(--fg);
+  font-size: 1.1rem;
+  margin: 8px 0 0;
+}}
+.pet .stats {{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}}
+.pet .pill {{
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 5px 9px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}}
+.mycelium {{
+  width: 100%;
+  max-width: 180px;
+}}
+.mycelium .body {{
+  transform-origin: 80px 80px;
+  animation: pulse 2.8s ease-in-out infinite;
+}}
+.mycelium.sleepy .body {{
+  opacity: 0.55;
+}}
+.mycelium.warming .body {{
+  animation-duration: 1.8s;
+}}
+.mycelium.thriving .tendril {{
+  animation: grow 2.5s ease-in-out infinite alternate;
+}}
+.mycelium.spicy .body,
+.mycelium.panicking .body {{
+  animation-duration: 0.8s;
+}}
+.mycelium.finished .spark {{
+  animation: twinkle 1.4s ease-in-out infinite alternate;
+}}
+@keyframes pulse {{
+  0%, 100% {{ transform: scale(1); }}
+  50% {{ transform: scale(1.06); }}
+}}
+@keyframes grow {{
+  from {{ stroke-dasharray: 8 12; }}
+  to {{ stroke-dasharray: 18 4; }}
+}}
+@keyframes twinkle {{
+  from {{ opacity: 0.35; transform: scale(0.9); }}
+  to {{ opacity: 1; transform: scale(1.1); }}
+}}
+@media (max-width: 620px) {{
+  .pet {{
+    grid-template-columns: 1fr;
+  }}
+  .mycelium {{
+    max-width: 140px;
+  }}
+}}
 </style>
 </head>
 <body>
@@ -223,6 +336,8 @@ fermentation progress, metabolic heat, and heater state. This report is generate
 controller with the simulated environment. The model deliberately leaves out vent and fan.
 Run <code>cargo run -- csv</code> when you want the raw data.
 </p>
+
+{pet_html}
 
 <section class="cards">
   <div class="card"><div class="label">Duration</div><div class="value">{duration_h:.1} h</div></div>
@@ -261,11 +376,75 @@ Run <code>cargo run -- csv</code> when you want the raw data.
         target = config.controller.target_box_air_temp_c,
         box_final = final_state.box_air_temp_c,
         tempeh_final = final_state.tempeh_core_temp_c,
+        pet_html = pet_html,
         progress = final_state.fermentation_progress * 100.0,
         temp_svg = temp_svg,
         progress_svg = progress_svg,
         heater_svg = heater_svg,
         rows = rows,
+    )
+}
+
+fn render_pet_card(report: &PetReport) -> String {
+    let ready = match report.pet.estimated_ready_in_s {
+        Some(seconds) if seconds <= 0.0 => "ready now".to_string(),
+        Some(seconds) => format!("{:.1} h to ready", seconds / 3600.0),
+        None => "ready time unknown".to_string(),
+    };
+
+    format!(
+        r#"<section class="pet">
+{svg}
+<div>
+  <h2>{headline}</h2>
+  <p class="speech">“{message}”</p>
+  <div class="stats">
+    <span class="pill">confidence {confidence:.0}%</span>
+    <span class="pill">safety margin {margin:.1} °C</span>
+    <span class="pill">{ready}</span>
+  </div>
+</div>
+</section>"#,
+        svg = render_mycelium_svg(report.pet.mood.css_class()),
+        headline = escape_html(&report.pet.headline("Miso")),
+        message = escape_html(report.pet.message()),
+        confidence = report.pet.mycelium_confidence * 100.0,
+        margin = report.pet.safety_margin_c,
+        ready = escape_html(&ready),
+    )
+}
+
+fn render_mycelium_svg(css_class: &str) -> String {
+    format!(
+        r##"<svg class="mycelium {css_class}" viewBox="0 0 160 160" role="img" aria-label="Animated mycelium pet">
+<defs>
+  <radialGradient id="mycelium-body" cx="45%" cy="38%" r="60%">
+    <stop offset="0%" stop-color="#fff7df"/>
+    <stop offset="60%" stop-color="#f0d7a2"/>
+    <stop offset="100%" stop-color="#c69256"/>
+  </radialGradient>
+</defs>
+<g fill="none" stroke="currentColor" opacity="0.45" stroke-linecap="round">
+  <path class="tendril" d="M80 82 C42 76 24 56 16 28" stroke-width="3"/>
+  <path class="tendril" d="M80 82 C118 76 136 56 144 28" stroke-width="3"/>
+  <path class="tendril" d="M80 92 C44 108 30 126 24 148" stroke-width="3"/>
+  <path class="tendril" d="M80 92 C116 108 130 126 136 148" stroke-width="3"/>
+  <path class="tendril" d="M76 80 C76 52 68 30 54 14" stroke-width="2"/>
+  <path class="tendril" d="M84 80 C84 52 92 30 106 14" stroke-width="2"/>
+</g>
+<g class="body">
+  <path d="M42 78 C42 42 65 25 83 27 C105 29 124 50 122 81 C120 113 101 132 78 130 C56 128 42 108 42 78 Z" fill="url(#mycelium-body)" stroke="currentColor" stroke-opacity="0.35" stroke-width="2"/>
+  <circle cx="66" cy="76" r="5" fill="#211d17"/>
+  <circle cx="96" cy="76" r="5" fill="#211d17"/>
+  <path d="M68 96 C76 104 87 104 95 96" fill="none" stroke="#211d17" stroke-width="4" stroke-linecap="round"/>
+</g>
+<g class="spark" fill="currentColor" opacity="0.55">
+  <circle cx="34" cy="36" r="3"/>
+  <circle cx="126" cy="44" r="2.5"/>
+  <circle cx="116" cy="124" r="3"/>
+</g>
+</svg>"##,
+        css_class = escape_html(css_class)
     )
 }
 

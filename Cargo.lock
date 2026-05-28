@@ -405,7 +405,15 @@ version = "0.1.0"
 dependencies = [
  "tempeh-control",
  "tempeh-model",
+ "tempeh-pet",
  "tempeh-sim",
+]
+
+[[package]]
+name = "tempeh-pet"
+version = "0.1.0"
+dependencies = [
+ "tempeh-model",
 ]
 
 [[package]]

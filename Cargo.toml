@@ -7,10 +7,12 @@ edition = "2024"
 tempeh-model = { path = "crates/tempeh-model" }
 tempeh-sim = { path = "crates/tempeh-sim" }
 tempeh-control = { path = "crates/tempeh-control" }
+tempeh-pet = { path = "crates/tempeh-pet" }
 
 [workspace]
 members = [
     "crates/tempeh-model",
     "crates/tempeh-sim",
     "crates/tempeh-control",
+    "crates/tempeh-pet",
 ]
