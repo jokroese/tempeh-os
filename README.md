@@ -50,6 +50,19 @@ TemperatureTrace -> TraceThermometer -> Controller -> TasmotaHeater
 cargo run -- trace-control-test http://192.168.8.193
 ```
 
+## Serial ports
+
+List available serial ports to help find the ESP32:
+
+```bash
+cargo run -- ports
+```
+
+The command prints USB metadata where available and marks ports that look like likely ESP32 devices.
+
+The command prints CSV snapshots with the latest known box-air and product/core temperatures.
+It does not control the heater.
+
 ## Pet mode
 
 `pet` turns the latest simulation state into a mycelial status report:

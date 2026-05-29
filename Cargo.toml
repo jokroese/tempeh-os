@@ -8,6 +8,7 @@ tempeh-model = { path = "crates/tempeh-model" }
 tempeh-sim = { path = "crates/tempeh-sim" }
 tempeh-control = { path = "crates/tempeh-control" }
 tempeh-pet = { path = "crates/tempeh-pet" }
+serialport = "4"
 
 [workspace]
 members = [
