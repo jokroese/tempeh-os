@@ -47,6 +47,33 @@ impl Default for ControllerConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TemperatureReading {
+    pub time_s: f32,
+    pub box_air_temp_c: f32,
+    pub tempeh_core_temp_c: Option<f32>,
+}
+
+impl TemperatureReading {
+    pub fn csv_header() -> &'static str {
+        "time_s,box_air_temp_c,tempeh_core_temp_c"
+    }
+
+    pub fn csv_row(&self) -> String {
+        let core = self
+            .tempeh_core_temp_c
+            .map(|temp| format!("{temp:.3}"))
+            .unwrap_or_default();
+        format!("{:.0},{:.3},{}", self.time_s, self.box_air_temp_c, core,)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TemperatureProbe {
+    BoxAir,
+    Product,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -84,5 +111,33 @@ mod tests {
                 hard_tempeh_cutoff_c: 37.0,
             }
         );
+    }
+
+    #[test]
+    fn temperature_reading_writes_csv_header() {
+        assert_eq!(
+            TemperatureReading::csv_header(),
+            "time_s,box_air_temp_c,tempeh_core_temp_c"
+        );
+    }
+
+    #[test]
+    fn temperature_reading_writes_csv_row_with_core() {
+        let reading = TemperatureReading {
+            time_s: 2.0,
+            box_air_temp_c: 22.4,
+            tempeh_core_temp_c: Some(23.1),
+        };
+        assert_eq!(reading.csv_row(), "2,22.400,23.100");
+    }
+
+    #[test]
+    fn temperature_reading_writes_csv_row_without_core() {
+        let reading = TemperatureReading {
+            time_s: 2.0,
+            box_air_temp_c: 22.4,
+            tempeh_core_temp_c: None,
+        };
+        assert_eq!(reading.csv_row(), "2,22.400,");
     }
 }

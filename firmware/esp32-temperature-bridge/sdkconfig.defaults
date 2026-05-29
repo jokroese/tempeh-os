@@ -1,0 +1,10 @@
+# Keep logging simple while bringing up serial output.
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# ESP32-S3 native USB serial/JTAG console.
+# This matches the /dev/cu.usbmodem... port on macOS when using the USB port.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_UART_NONE=y
+
+# Avoid surprises from old boot messages where possible.
+CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y

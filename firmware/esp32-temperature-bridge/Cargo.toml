@@ -1,0 +1,25 @@
+[package]
+name = "esp32-temperature-bridge"
+version = "0.1.0"
+edition = "2024"
+resolver = "2"
+
+[dependencies]
+anyhow = "1"
+esp-idf-hal = "0.45"
+esp-idf-svc = "0.51"
+esp-idf-sys = { version = "0.36", features = ["binstart"] }
+log = "0.4"
+
+[build-dependencies]
+embuild = "0.33"
+
+[profile.release]
+opt-level = "s"
+debug = true
+strip = false
+lto = "off"
+codegen-units = 1
+
+[package.metadata.esp-idf-sys]
+esp_idf_version = "v5.4.1"

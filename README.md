@@ -50,6 +50,74 @@ TemperatureTrace -> TraceThermometer -> Controller -> TasmotaHeater
 cargo run -- trace-control-test http://192.168.8.193
 ```
 
+## ESP32 temperature bridge firmware
+
+The ESP32 must be flashed before thermometer-test can read real serial data.
+
+The firmware lives in:
+
+```
+firmware/esp32-temperature-bridge
+```
+
+Install the ESP Rust tools:
+
+```bash
+cargo install espup
+espup install
+cargo install espflash
+```
+
+Load the ESP toolchain environment in the current shell:
+
+```bash
+. ~/export-esp.sh
+```
+
+Flash and monitor the ESP32-S3:
+
+```bash
+cd firmware/esp32-temperature-bridge
+ESPFLASH_PORT=/dev/cu.usbmodem1234561 cargo run --release
+```
+
+The firmware currently reads one DS18B20 probe on GPIO4 and labels it as box_air:
+
+```
+temp,box_air,22.437
+```
+
+## Real thermometer smoke test
+
+`thermometer-test` reads labelled temperature lines from stdin or a serial port.
+
+Current ESP32 firmware output:
+
+```
+temp,box_air,22.437
+```
+
+Use stdin for parser testing:
+
+```bash
+printf "temp,box_air,22.4\n" | cargo run -- thermometer-test -
+```
+
+Use a serial port for the ESP32 temperature bridge:
+
+```bash
+cargo run -- thermometer-test /dev/ttyUSB0
+cargo run -- thermometer-test /dev/ttyACM0
+cargo run -- thermometer-test /dev/cu.usbmodem1234561
+```
+
+Expected CSV output for the current single-probe firmware:
+
+```text
+time_s,box_air_temp_c,tempeh_core_temp_c
+1,22.437,
+```
+
 ## Serial ports
 
 List available serial ports to help find the ESP32:
@@ -60,7 +128,7 @@ cargo run -- ports
 
 The command prints USB metadata where available and marks ports that look like likely ESP32 devices.
 
-The command prints CSV snapshots with the latest known box-air and product/core temperatures.
+The command prints CSV snapshots with the latest known box-air temperature. The product/core column is blank until a second probe is added.
 It does not control the heater.
 
 ## Pet mode

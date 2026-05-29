@@ -17,3 +17,7 @@ members = [
     "crates/tempeh-control",
     "crates/tempeh-pet",
 ]
+
+exclude = [
+    "firmware/esp32-temperature-bridge",
+]

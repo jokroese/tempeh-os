@@ -277,12 +277,9 @@ pub fn detect_events(samples: &[EnvironmentState], config: ControllerConfig) -> 
         },
     );
 
-    push_first_matching(
-        &mut events,
-        samples,
-        PetEventKind::GettingSpicy,
-        |sample| sample.tempeh_core_temp_c >= 35.0,
-    );
+    push_first_matching(&mut events, samples, PetEventKind::GettingSpicy, |sample| {
+        sample.tempeh_core_temp_c >= 35.0
+    });
 
     push_first_matching(
         &mut events,

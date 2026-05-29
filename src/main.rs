@@ -1,12 +1,14 @@
 use std::env;
 use std::fs;
+use std::io::{self, BufRead, BufReader};
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use tempeh_control::{
     ControlLoop, ControlReading, Controller, Heater, TasmotaHeater, TraceThermometer,
-    run_trace_control,
+    parse_temperature_line, run_trace_control,
 };
-use tempeh_model::EnvironmentState;
+use tempeh_model::{EnvironmentState, TemperatureProbe, TemperatureReading};
 use tempeh_pet::{PetEvent, PetReport, format_event_time, report_for_samples};
 use tempeh_sim::{SimConfig, Simulator, TemperatureTrace};
 
@@ -41,6 +43,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "trace-control-test" => {
             run_trace_control_test(env::args().nth(2))?;
         }
+        "thermometer-test" => {
+            run_thermometer_test(env::args().nth(2))?;
+        }
         "ports" | "list-ports" => {
             list_serial_ports(env::args().any(|arg| arg == "--all"))?;
         }
@@ -57,7 +62,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn print_help() {
     eprintln!(
-        "Usage:\n  cargo run                               # write out/sim.html\n  cargo run -- html                       # write out/sim.html\n  cargo run -- csv                        # print simulation CSV\n  cargo run -- control                    # print simulated control-loop CSV\n  cargo run -- pet                        # print the mycelial pet status\n  cargo run -- plug-test <url>            # turn Tasmota plug on, wait, turn off\n  cargo run -- trace-control-test <url>   # drive Tasmota plug from a short fake temperature trace\n\nEnvironment:\n  TEMPEH_TASMOTA_URL=http://192.168.1.50"
+        "Usage:\n  cargo run                               # write out/sim.html\n  cargo run -- html                       # write out/sim.html\n  cargo run -- csv                        # print simulation CSV\n  cargo run -- control                    # print simulated control-loop CSV\n  cargo run -- pet                        # print the mycelial pet status\n  cargo run -- ports                      # recommend likely ESP32 serial port\n  cargo run -- ports --all                # list all available serial ports\n  cargo run -- plug-test <url>            # turn Tasmota plug on, wait, turn off\n  cargo run -- trace-control-test <url>   # drive Tasmota plug from a short fake temperature trace\n  cargo run -- thermometer-test <port|-> # read labelled temperature lines from serial or stdin\n\nEnvironment:\n  TEMPEH_TASMOTA_URL=http://192.168.1.50"
     );
 }
 
@@ -870,6 +875,119 @@ fn run_trace_control_test_steps(
         std::thread::sleep(std::time::Duration::from_secs(2));
     }
 
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LatestTemperatureReadings {
+    box_air_temp_c: Option<f32>,
+    tempeh_core_temp_c: Option<f32>,
+}
+
+impl LatestTemperatureReadings {
+    fn new() -> Self {
+        Self {
+            box_air_temp_c: None,
+            tempeh_core_temp_c: None,
+        }
+    }
+
+    fn update(&mut self, probe: TemperatureProbe, temp_c: f32) {
+        match probe {
+            TemperatureProbe::BoxAir => self.box_air_temp_c = Some(temp_c),
+            TemperatureProbe::Product => self.tempeh_core_temp_c = Some(temp_c),
+        }
+    }
+
+    fn reading(&self, time_s: f32) -> Option<TemperatureReading> {
+        Some(TemperatureReading {
+            time_s,
+            box_air_temp_c: self.box_air_temp_c?,
+            tempeh_core_temp_c: self.tempeh_core_temp_c,
+        })
+    }
+}
+
+fn run_thermometer_test(source_arg: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+    let source = source_arg.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "provide a serial port or '-' for stdin, e.g. cargo run -- thermometer-test /dev/ttyUSB0",
+        )
+    })?;
+    if source == "-" {
+        let stdin = io::stdin();
+        let reader = stdin.lock();
+        return read_temperature_lines(reader);
+    }
+    let port = serialport::new(&source, DEFAULT_SERIAL_BAUD)
+        .timeout(Duration::from_millis(2_000))
+        .open()
+        .map_err(|error| {
+            std::io::Error::other(format!(
+                "failed to open serial port {source} at {DEFAULT_SERIAL_BAUD} baud: {error}"
+            ))
+        })?;
+
+    eprintln!("Reading temperatures from {source} at {DEFAULT_SERIAL_BAUD} baud.");
+    eprintln!("Expected line from current firmware: temp,box_air,22.437");
+    eprintln!(
+        "If you see ESP-IDF example logs instead, flash firmware/esp32-temperature-bridge first."
+    );
+    eprintln!("Press Ctrl-C to stop.");
+    read_temperature_lines(BufReader::new(port))
+}
+
+fn read_temperature_lines<R>(mut reader: R) -> Result<(), Box<dyn std::error::Error>>
+where
+    R: BufRead,
+{
+    let start = Instant::now();
+    let mut latest = LatestTemperatureReadings::new();
+    let mut line = String::new();
+    let mut printed_header = false;
+    loop {
+        line.clear();
+        let bytes = match reader.read_line(&mut line) {
+            Ok(bytes) => bytes,
+            Err(error)
+                if error.kind() == io::ErrorKind::TimedOut
+                    || error.kind() == io::ErrorKind::WouldBlock =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if bytes == 0 {
+            break;
+        }
+        let parsed = match parse_temperature_line(&line) {
+            Ok(Some(parsed)) => parsed,
+            Ok(None) => continue,
+            Err(error) => {
+                eprintln!(
+                    "Ignoring invalid temperature line {:?}: {error:?}",
+                    line.trim()
+                );
+                continue;
+            }
+        };
+        latest.update(parsed.probe, parsed.temp_c);
+        let time_s = start.elapsed().as_secs_f32();
+        let Some(reading) = latest.reading(time_s) else {
+            continue;
+        };
+        if !printed_header {
+            println!("{}", TemperatureReading::csv_header());
+            printed_header = true;
+        }
+        println!("{}", reading.csv_row());
+    }
+    if !printed_header {
+        eprintln!(
+            "No complete temperature reading received. Need at least a temp,box_air,<°C> line."
+        );
+    }
     Ok(())
 }
 
