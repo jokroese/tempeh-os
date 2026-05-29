@@ -54,6 +54,8 @@ cargo run -- trace-control-test http://192.168.8.193
 
 `pet` turns the latest simulation state into a mycelial status report:
 
+It includes a batch diary that narrates major milestones such as warm-up, metabolic heat, heat risk, and readiness.
+
 ```bash
 cargo run -- pet
 ```

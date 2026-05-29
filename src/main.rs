@@ -7,7 +7,7 @@ use tempeh_control::{
     run_trace_control,
 };
 use tempeh_model::EnvironmentState;
-use tempeh_pet::{PetReport, report_for_samples};
+use tempeh_pet::{PetEvent, PetReport, format_event_time, report_for_samples};
 use tempeh_sim::{SimConfig, Simulator, TemperatureTrace};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -98,6 +98,14 @@ fn print_pet_report(samples: &[EnvironmentState], config: &SimConfig) {
     println!();
     println!("Miso says:");
     println!("“{}”", report.pet.message());
+
+    if !report.events.is_empty() {
+        println!();
+        println!("Diary:");
+        for event in &report.events {
+            println!("{}  {}", format_event_time(*event), event.message());
+        }
+    }
 }
 
 fn render_html(samples: &[EnvironmentState], config: &SimConfig) -> String {
@@ -281,6 +289,35 @@ code {{
   color: var(--muted);
   font-size: 0.9rem;
 }}
+.diary {{
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 18px;
+  margin: 18px 0 24px;
+}}
+.diary h2 {{
+  margin: 0 0 12px;
+}}
+.diary ol {{
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}}
+.diary li {{
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}}
+.diary li:first-child {{
+  border-top: 0;
+}}
+.diary time {{
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}}
 .mycelium {{
   width: 100%;
   max-width: 180px;
@@ -392,6 +429,8 @@ fn render_pet_card(report: &PetReport) -> String {
         None => "ready time unknown".to_string(),
     };
 
+    let diary = render_diary(&report.events);
+
     format!(
         r#"<section class="pet">
 {svg}
@@ -404,13 +443,42 @@ fn render_pet_card(report: &PetReport) -> String {
     <span class="pill">{ready}</span>
   </div>
 </div>
-</section>"#,
+</section>
+{diary}"#,
         svg = render_mycelium_svg(report.pet.mood.css_class()),
         headline = escape_html(&report.pet.headline("Miso")),
         message = escape_html(report.pet.message()),
         confidence = report.pet.mycelium_confidence * 100.0,
         margin = report.pet.safety_margin_c,
         ready = escape_html(&ready),
+        diary = diary,
+    )
+}
+
+fn render_diary(events: &[PetEvent]) -> String {
+    if events.is_empty() {
+        return String::new();
+    }
+
+    let items = events
+        .iter()
+        .map(|event| {
+            format!(
+                r#"<li><time>{time}</time><span>{message}</span></li>"#,
+                time = escape_html(&format_event_time(*event)),
+                message = escape_html(event.message()),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!(
+        r#"<section class="diary">
+<h2>Batch diary</h2>
+<ol>
+{items}
+</ol>
+</section>"#
     )
 }
 

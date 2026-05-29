@@ -80,10 +80,63 @@ impl PetState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PetEventKind {
+    Started,
+    WarmedUp,
+    MetabolicHeatDetected,
+    HeaterMostlyIdle,
+    GettingSpicy,
+    SafetyCutoffApproached,
+    Ready,
+}
+
+impl PetEventKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Started => "Spores tucked in.",
+            Self::WarmedUp => "Reached cosy air temperature.",
+            Self::MetabolicHeatDetected => "Metabolic heat detected.",
+            Self::HeaterMostlyIdle => "The culture is carrying more of its own warmth.",
+            Self::GettingSpicy => "Core temperature is climbing. Watch airflow.",
+            Self::SafetyCutoffApproached => "Safety cutoff is getting close.",
+            Self::Ready => "Ready.",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PetEvent {
+    pub time_s: f32,
+    pub kind: PetEventKind,
+}
+
+impl PetEvent {
+    pub fn new(time_s: f32, kind: PetEventKind) -> Self {
+        Self { time_s, kind }
+    }
+
+    pub fn message(&self) -> &'static str {
+        self.kind.label()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct PetReport {
     pub state: EnvironmentState,
     pub pet: PetState,
+    pub events: Vec<PetEvent>,
+}
+
+pub fn format_duration_hm(time_s: f32) -> String {
+    let total_minutes = (time_s.max(0.0) / 60.0).round() as u32;
+    let hours = total_minutes / 60;
+    let minutes = total_minutes % 60;
+    format!("{hours:02}:{minutes:02}")
+}
+
+pub fn format_event_time(event: PetEvent) -> String {
+    format_duration_hm(event.time_s)
 }
 
 pub fn analyse_pet(
@@ -165,7 +218,8 @@ pub fn report_for_samples(
     let state = samples.last().copied()?;
     let estimated_ready_in_s = estimate_ready_in_s(samples);
     let pet = analyse_pet(state, config, estimated_ready_in_s);
-    Some(PetReport { state, pet })
+    let events = detect_events(samples, config);
+    Some(PetReport { state, pet, events })
 }
 
 pub fn estimate_ready_in_s(samples: &[EnvironmentState]) -> Option<f32> {
@@ -193,6 +247,72 @@ pub fn estimate_ready_in_s(samples: &[EnvironmentState]) -> Option<f32> {
     Some((remaining / progress_per_s).max(0.0))
 }
 
+pub fn detect_events(samples: &[EnvironmentState], config: ControllerConfig) -> Vec<PetEvent> {
+    if samples.is_empty() {
+        return Vec::new();
+    }
+
+    let mut events = Vec::new();
+    events.push(PetEvent::new(samples[0].time_s, PetEventKind::Started));
+
+    push_first_matching(&mut events, samples, PetEventKind::WarmedUp, |sample| {
+        sample.box_air_temp_c >= config.target_box_air_temp_c - config.hysteresis_c
+    });
+
+    push_first_matching(
+        &mut events,
+        samples,
+        PetEventKind::MetabolicHeatDetected,
+        |sample| sample.metabolic_heat_rate_c_per_s >= 0.00004,
+    );
+
+    push_first_matching(
+        &mut events,
+        samples,
+        PetEventKind::HeaterMostlyIdle,
+        |sample| {
+            sample.fermentation_progress >= 0.35
+                && sample.metabolic_heat_rate_c_per_s >= 0.00008
+                && !sample.heater_on
+        },
+    );
+
+    push_first_matching(
+        &mut events,
+        samples,
+        PetEventKind::GettingSpicy,
+        |sample| sample.tempeh_core_temp_c >= 35.0,
+    );
+
+    push_first_matching(
+        &mut events,
+        samples,
+        PetEventKind::SafetyCutoffApproached,
+        |sample| {
+            sample.box_air_temp_c >= config.hard_box_cutoff_c - 0.75
+                || sample.tempeh_core_temp_c >= config.hard_tempeh_cutoff_c - 1.0
+        },
+    );
+
+    push_first_matching(&mut events, samples, PetEventKind::Ready, |sample| {
+        sample.fermentation_progress >= 0.95
+    });
+
+    events.sort_by(|a, b| a.time_s.total_cmp(&b.time_s));
+    events
+}
+
+fn push_first_matching(
+    events: &mut Vec<PetEvent>,
+    samples: &[EnvironmentState],
+    kind: PetEventKind,
+    predicate: impl Fn(EnvironmentState) -> bool,
+) {
+    if let Some(sample) = samples.iter().copied().find(|sample| predicate(*sample)) {
+        events.push(PetEvent::new(sample.time_s, kind));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,6 +331,26 @@ mod tests {
             fermentation_progress,
             metabolic_heat_rate_c_per_s,
             heater_on: false,
+        }
+    }
+
+    fn timed_state(
+        time_s: f32,
+        box_air_temp_c: f32,
+        tempeh_core_temp_c: f32,
+        fermentation_progress: f32,
+        metabolic_heat_rate_c_per_s: f32,
+        heater_on: bool,
+    ) -> EnvironmentState {
+        EnvironmentState {
+            time_s,
+            heater_on,
+            ..state(
+                box_air_temp_c,
+                tempeh_core_temp_c,
+                fermentation_progress,
+                metabolic_heat_rate_c_per_s,
+            )
         }
     }
 
@@ -264,5 +404,70 @@ mod tests {
 
         let estimate = estimate_ready_in_s(&samples).expect("estimate");
         assert!((estimate - 350.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn duration_formats_as_hours_and_minutes() {
+        assert_eq!(format_duration_hm(0.0), "00:00");
+        assert_eq!(format_duration_hm(60.0), "00:01");
+        assert_eq!(format_duration_hm(3660.0), "01:01");
+    }
+
+    #[test]
+    fn event_detector_starts_with_spores_tucked_in() {
+        let config = ControllerConfig::default();
+        let samples = vec![timed_state(0.0, 20.0, 25.0, 0.0, 0.0, false)];
+
+        let events = detect_events(&samples, config);
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, PetEventKind::Started);
+    }
+
+    #[test]
+    fn event_detector_finds_batch_milestones_in_order() {
+        let config = ControllerConfig::default();
+        let samples = vec![
+            timed_state(0.0, 20.0, 25.0, 0.00, 0.0, false),
+            timed_state(600.0, 29.7, 28.0, 0.05, 0.0, true),
+            timed_state(2_400.0, 30.0, 30.0, 0.20, 0.00005, true),
+            timed_state(5_400.0, 30.1, 31.0, 0.40, 0.00010, false),
+            timed_state(7_200.0, 30.8, 35.0, 0.70, 0.00012, false),
+            timed_state(8_400.0, 33.4, 36.1, 0.82, 0.00009, false),
+            timed_state(9_600.0, 31.0, 32.0, 0.96, 0.00002, false),
+        ];
+
+        let kinds = detect_events(&samples, config)
+            .into_iter()
+            .map(|event| event.kind)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            kinds,
+            vec![
+                PetEventKind::Started,
+                PetEventKind::WarmedUp,
+                PetEventKind::MetabolicHeatDetected,
+                PetEventKind::HeaterMostlyIdle,
+                PetEventKind::GettingSpicy,
+                PetEventKind::SafetyCutoffApproached,
+                PetEventKind::Ready,
+            ]
+        );
+    }
+
+    #[test]
+    fn report_includes_events() {
+        let config = ControllerConfig::default();
+        let samples = vec![
+            timed_state(0.0, 20.0, 25.0, 0.0, 0.0, false),
+            timed_state(600.0, 29.8, 28.0, 0.1, 0.0, true),
+        ];
+
+        let report = report_for_samples(&samples, config).expect("report");
+
+        assert_eq!(report.events.len(), 2);
+        assert_eq!(report.events[0].kind, PetEventKind::Started);
+        assert_eq!(report.events[1].kind, PetEventKind::WarmedUp);
     }
 }
