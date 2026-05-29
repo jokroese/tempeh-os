@@ -21,7 +21,7 @@ A low-cost, reproducible tempeh incubator using a plastic storage box, seedling 
 | Heater             | Seedling heat mat                            | Amazon Spain       | https://www.amazon.es/-/en/dp/B08JD1FB5B                                       |       1 |        €15 |   €15 | yes       | owned  | Plain seedling heat mat, roughly 20–30 W, no built-in controller preferred.                          | Controlled by Tasmota.                                            |
 | Rack               | Food/cooling rack                            | Amazon Spain       | https://www.amazon.es/-/en/dp/B0DR199784                                       |       1 |        €11 |   €11 | yes       | owned  | Stainless or food-safe metal rack with raised feet, fitting inside box with airflow clearance.       | Keeps tempeh packets off heat spreader.                           |
 | Enclosure          | IKEA SAMLA 45 L box with lid                 | IKEA Spain         | https://www.ikea.com/es/en/p/samla-box-with-lid-transparent-s69440761/         |       1 |        €10 |   €10 | yes       | owned  | Transparent PP/plastic box, roughly 40–50 L, floor large enough for mat/rack, lid can sit loosely.   | Outer warm-air chamber only; not food-contact.                    |
-| Food bags          | IKEA ISTAD resealable bags                   | IKEA Spain         | https://www.ikea.com/es/en/p/istad-resealable-bag-patterned-red-pink-80525674/ |  1 pack |         €3 |    €3 | yes       | owned  | Food-contact freezer/zip bags suitable above 35 °C and able to be perforated.                        | Perforate before incubation.                                      |
+| Food bags          | IKEA ISTAD resealable bags, 1.2 L / 2.5 L pack | IKEA Spain       | https://www.ikea.com/es/en/p/istad-resealable-bag-patterned-red-pink-80525674/ |  1 pack |         €3 |    €3 | yes       | owned  | Food-contact freezer/zip bags suitable above 35 °C and able to be perforated. Preferred bag size is about 20 × 20 cm. | Use the 1.2 L bags, 21 × 19 cm, for first experiments. The included 2.5 L bags can be used later if the bean layer remains thin. Perforate before incubation. |
 | Heat spreader      | Thin aluminium sheet or baking tray          | local / TBD        |                                                                                |       1 |        TBD |   TBD | yes       | needed | Aluminium/stainless tray or ceramic tile covering most of heater footprint.                          | Spreads heat and prevents local hotspots.                         |
 | Wiring             | Jumper wires                                 | generic / TBD      |                                                                                |   1 set |        TBD |   TBD | yes       | needed | Jumper wires compatible with ESP32 and DS18B20 adapter/probe wiring.                                 | ESP32 to probes.                                                  |
 | Prototyping        | Breadboard                                   | generic / TBD      |                                                                                |       1 |        TBD |   TBD | yes       | needed | Small breadboard, screw terminal, Wago-style connector, or equivalent prototyping connection method. | First wiring prototype.                                           |
@@ -62,3 +62,13 @@ Prototype stack:
 3. heat spreader
 4. rack
 5. perforated ISTAD tempeh bags
+
+## Tempeh bag size
+
+Use the **1.2 L ISTAD bags** from the 1.2 L / 2.5 L pack for the first experiments.
+
+- 1.2 L bag size: **21 × 19 cm**
+- target bean layer: **15–20 mm thick**
+- hole spacing: roughly **10–15 mm**, on both sides
+
+The included 2.5 L bags are larger, **25 × 25 cm**, and are not the default for v0 because they encourage larger slabs. They are acceptable later if the bean layer is still kept to 15–20 mm thick.
