@@ -2,6 +2,8 @@ use std::env;
 use std::fs;
 use std::io::{self, BufRead, BufReader};
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use tempeh_control::{
@@ -46,6 +48,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "thermometer-test" => {
             run_thermometer_test(env::args().nth(2))?;
         }
+        "real-control-test" => {
+            run_real_control_test(env::args().nth(2), env::args().nth(3))?;
+        }
         "ports" | "list-ports" => {
             list_serial_ports(env::args().any(|arg| arg == "--all"))?;
         }
@@ -62,7 +67,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn print_help() {
     eprintln!(
-        "Usage:\n  cargo run                               # write out/sim.html\n  cargo run -- html                       # write out/sim.html\n  cargo run -- csv                        # print simulation CSV\n  cargo run -- control                    # print simulated control-loop CSV\n  cargo run -- pet                        # print the mycelial pet status\n  cargo run -- ports                      # recommend likely ESP32 serial port\n  cargo run -- ports --all                # list all available serial ports\n  cargo run -- plug-test <url>            # turn Tasmota plug on, wait, turn off\n  cargo run -- trace-control-test <url>   # drive Tasmota plug from a short fake temperature trace\n  cargo run -- thermometer-test <port|-> # read labelled temperature lines from serial or stdin\n\nEnvironment:\n  TEMPEH_TASMOTA_URL=http://192.168.1.50"
+        "Usage:\n  cargo run                               # write out/sim.html\n  cargo run -- html                       # write out/sim.html\n  cargo run -- csv                        # print simulation CSV\n  cargo run -- control                    # print simulated control-loop CSV\n  cargo run -- pet                        # print the mycelial pet status\n  cargo run -- ports                      # recommend likely ESP32 serial port\n  cargo run -- ports --all                # list all available serial ports\n  cargo run -- plug-test <url>            # turn Tasmota plug on, wait, turn off\n  cargo run -- trace-control-test <url>   # drive Tasmota plug from a short fake temperature trace\n  cargo run -- thermometer-test <port|->  # read labelled temperature lines from serial or stdin\n  cargo run -- real-control-test <port> <url> # drive Tasmota plug from real ESP32 temperature\n\nEnvironment:\n  TEMPEH_TASMOTA_URL=http://192.168.1.50"
     );
 }
 
@@ -987,6 +992,135 @@ where
         eprintln!(
             "No complete temperature reading received. Need at least a temp,box_air,<°C> line."
         );
+    }
+    Ok(())
+}
+
+fn run_real_control_test(
+    source_arg: Option<String>,
+    url_arg: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let source = source_arg.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "provide an ESP32 serial port, e.g. cargo run -- real-control-test /dev/cu.usbmodem1234561 http://192.168.1.50",
+        )
+    })?;
+    let base_url = tasmota_base_url(url_arg)?;
+    let port = serialport::new(&source, DEFAULT_SERIAL_BAUD)
+        .timeout(Duration::from_millis(2_000))
+        .open()
+        .map_err(|error| {
+            std::io::Error::other(format!(
+                "failed to open serial port {source} at {DEFAULT_SERIAL_BAUD} baud: {error}"
+            ))
+        })?;
+
+    let stop_requested = Arc::new(AtomicBool::new(false));
+    {
+        let stop_requested = Arc::clone(&stop_requested);
+        ctrlc::set_handler(move || {
+            stop_requested.store(true, Ordering::SeqCst);
+        })
+        .map_err(|error| {
+            std::io::Error::other(format!("failed to install Ctrl-C handler: {error}"))
+        })?;
+    }
+
+    let mut heater = TasmotaHeater::new(base_url);
+    eprintln!("Starting real control test.");
+    eprintln!("Reading box_air from {source} at {DEFAULT_SERIAL_BAUD} baud.");
+    eprintln!("Driving Tasmota plug at {}.", heater.base_url());
+    eprintln!("Using box_air as assumed tempeh/core temperature until the second probe exists.");
+    eprintln!("Press Ctrl-C to stop.");
+
+    // Start from a known safe state.
+    eprintln!("Sending initial off command.");
+    heater
+        .set_heater(false)
+        .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
+
+    let result = run_real_control_test_loop(
+        BufReader::new(port),
+        &mut heater,
+        Arc::clone(&stop_requested),
+    );
+
+    eprintln!("Sending final off command.");
+    let shutdown_result = heater
+        .set_heater(false)
+        .map_err(|error| std::io::Error::other(format!("{error:?}")));
+
+    result?;
+    shutdown_result?;
+    eprintln!("Real control test stopped. Final command sent: off.");
+    Ok(())
+}
+
+fn run_real_control_test_loop<R>(
+    mut reader: R,
+    heater: &mut TasmotaHeater,
+    stop_requested: Arc<AtomicBool>,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    R: BufRead,
+{
+    let config = SimConfig::default();
+    let mut controller = Controller::new(config.controller);
+    let start = Instant::now();
+    let mut line = String::new();
+    let mut printed_header = false;
+
+    while !stop_requested.load(Ordering::SeqCst) {
+        line.clear();
+        let bytes = match reader.read_line(&mut line) {
+            Ok(bytes) => bytes,
+            Err(error)
+                if error.kind() == io::ErrorKind::TimedOut
+                    || error.kind() == io::ErrorKind::WouldBlock =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if bytes == 0 {
+            break;
+        }
+        let parsed = match parse_temperature_line(&line) {
+            Ok(Some(parsed)) => parsed,
+            Ok(None) => continue,
+            Err(error) => {
+                eprintln!(
+                    "Ignoring invalid temperature line {:?}: {error:?}",
+                    line.trim()
+                );
+                continue;
+            }
+        };
+        let TemperatureProbe::BoxAir = parsed.probe else {
+            continue;
+        };
+        let box_air_temp_c = parsed.temp_c;
+        let assumed_tempeh_core_temp_c = box_air_temp_c;
+        let heater_on = controller.update(box_air_temp_c, assumed_tempeh_core_temp_c);
+        heater
+            .set_heater(heater_on)
+            .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
+        if !printed_header {
+            println!("time_s,box_air_temp_c,assumed_tempeh_core_temp_c,heater_on");
+            printed_header = true;
+        }
+        println!(
+            "{:.0},{:.3},{:.3},{}",
+            start.elapsed().as_secs_f32(),
+            box_air_temp_c,
+            assumed_tempeh_core_temp_c,
+            if heater_on { 1 } else { 0 }
+        );
+    }
+
+    if !printed_header {
+        eprintln!("No box_air temperature reading received.");
     }
     Ok(())
 }

@@ -87,6 +87,18 @@ The firmware currently reads one DS18B20 probe on GPIO4 and labels it as box_air
 temp,box_air,22.437
 ```
 
+## Real control smoke test
+
+`real-control-test` reads the ESP32 temperature bridge and drives the Tasmota plug from the real box-air temperature.
+
+For this first real control test, the single `box_air` probe is also used as the assumed tempeh/core temperature.
+
+```bash
+cargo run -- real-control-test /dev/cu.usbmodem1234561 http://192.168.8.193
+```
+
+Press Ctrl-C to stop. The command will try to leave the plug off before exiting.
+
 ## Real thermometer smoke test
 
 `thermometer-test` reads labelled temperature lines from stdin or a serial port.
