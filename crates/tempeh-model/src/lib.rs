@@ -32,8 +32,6 @@ impl EnvironmentState {
 pub struct ControllerConfig {
     pub target_box_air_temp_c: f32,
     pub hysteresis_c: f32,
-    pub hard_box_cutoff_c: f32,
-    pub hard_tempeh_cutoff_c: f32,
 }
 
 impl Default for ControllerConfig {
@@ -41,8 +39,6 @@ impl Default for ControllerConfig {
         Self {
             target_box_air_temp_c: 30.0,
             hysteresis_c: 0.4,
-            hard_box_cutoff_c: 34.0,
-            hard_tempeh_cutoff_c: 37.0,
         }
     }
 }
@@ -107,8 +103,6 @@ mod tests {
             ControllerConfig {
                 target_box_air_temp_c: 30.0,
                 hysteresis_c: 0.4,
-                hard_box_cutoff_c: 34.0,
-                hard_tempeh_cutoff_c: 37.0,
             }
         );
     }

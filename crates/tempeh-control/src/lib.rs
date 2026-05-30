@@ -33,13 +33,7 @@ impl Controller {
         }
     }
 
-    pub fn update(&mut self, box_air_temp_c: f32, tempeh_core_temp_c: f32) -> bool {
-        if box_air_temp_c >= self.config.hard_box_cutoff_c
-            || tempeh_core_temp_c >= self.config.hard_tempeh_cutoff_c
-        {
-            self.heater_on = false;
-            return self.heater_on;
-        }
+    pub fn update(&mut self, box_air_temp_c: f32) -> bool {
         if !self.heater_on
             && box_air_temp_c < self.config.target_box_air_temp_c - self.config.hysteresis_c
         {
@@ -122,19 +116,16 @@ where
     }
 
     /// Read one thermometer and update one heater.
-    ///
-    /// For this first hardware abstraction pass, the same measured temperature
-    /// is used for both box air and tempeh-core inputs to the controller.
-    /// Once we have multiple sensors, this should become a multi-probe control step.
     pub fn step(&mut self, time_s: f32) -> Result<ControlReading, ControlError> {
         let measured_temp_c = self.thermometer.read_celsius()?;
 
         if !measured_temp_c.is_finite() {
+            // A bad reading is not a control input. Leave the heater off.
             self.heater.set_heater(false)?;
             return Err(ThermometerError::InvalidReading.into());
         }
 
-        let heater_on = self.controller.update(measured_temp_c, measured_temp_c);
+        let heater_on = self.controller.update(measured_temp_c);
         self.heater.set_heater(heater_on)?;
 
         Ok(ControlReading {
@@ -415,11 +406,11 @@ mod tests {
     }
 
     #[test]
-    fn control_loop_turns_heater_off_at_hard_cutoff() {
+    fn control_loop_turns_heater_off_above_target_band() {
         let config = ControllerConfig::default();
         let thermometer = TraceThermometer::new(TemperatureTrace::new(vec![
             20.0,
-            config.hard_box_cutoff_c + 0.5,
+            config.target_box_air_temp_c + config.hysteresis_c + 0.1,
         ]));
         let heater = LoggingHeater::new();
         let mut control = ControlLoop::new(config, thermometer, heater);
@@ -433,12 +424,15 @@ mod tests {
     }
 
     #[test]
-    fn controller_turns_off_at_hard_cutoff() {
+    fn controller_uses_hysteresis() {
         let config = ControllerConfig::default();
         let mut controller = Controller::new(config);
-        assert!(controller.update(20.0, 20.0));
-        assert!(!controller.update(config.hard_box_cutoff_c + 0.1, 20.0));
-        assert!(!controller.update(20.0, config.hard_tempeh_cutoff_c + 0.1));
+
+        assert!(controller.update(20.0));
+        assert!(controller.update(config.target_box_air_temp_c));
+        assert!(!controller.update(config.target_box_air_temp_c + config.hysteresis_c + 0.1));
+        assert!(!controller.update(config.target_box_air_temp_c));
+        assert!(controller.update(config.target_box_air_temp_c - config.hysteresis_c - 0.1));
     }
 
     #[test]

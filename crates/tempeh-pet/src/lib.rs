@@ -87,7 +87,6 @@ pub enum PetEventKind {
     MetabolicHeatDetected,
     HeaterMostlyIdle,
     GettingSpicy,
-    SafetyCutoffApproached,
     Ready,
 }
 
@@ -99,7 +98,6 @@ impl PetEventKind {
             Self::MetabolicHeatDetected => "Metabolic heat detected.",
             Self::HeaterMostlyIdle => "The culture is carrying more of its own warmth.",
             Self::GettingSpicy => "Core temperature is climbing. Watch airflow.",
-            Self::SafetyCutoffApproached => "Safety cutoff is getting close.",
             Self::Ready => "Ready.",
         }
     }
@@ -144,8 +142,7 @@ pub fn analyse_pet(
     config: ControllerConfig,
     estimated_ready_in_s: Option<f32>,
 ) -> PetState {
-    let safety_margin_c = config.hard_tempeh_cutoff_c.min(config.hard_box_cutoff_c)
-        - state.tempeh_core_temp_c.max(state.box_air_temp_c);
+    let safety_margin_c = thermal_margin_c(state);
 
     let mycelium_confidence = mycelium_confidence(state, config);
     let mood = mood(state, config, mycelium_confidence);
@@ -163,9 +160,7 @@ pub fn mood(
     config: ControllerConfig,
     mycelium_confidence: f32,
 ) -> TempehMood {
-    if state.box_air_temp_c >= config.hard_box_cutoff_c
-        || state.tempeh_core_temp_c >= config.hard_tempeh_cutoff_c
-    {
+    if state.tempeh_core_temp_c >= 37.0 || state.box_air_temp_c >= 34.0 {
         TempehMood::Panicking
     } else if state.fermentation_progress >= 0.95 {
         TempehMood::Finished
@@ -205,10 +200,12 @@ fn temp_score(temp_c: f32) -> f32 {
 }
 
 fn safety_score(state: EnvironmentState, config: ControllerConfig) -> f32 {
-    let hot_margin = config.hard_tempeh_cutoff_c.min(config.hard_box_cutoff_c)
-        - state.tempeh_core_temp_c.max(state.box_air_temp_c);
+    let _ = config;
+    (thermal_margin_c(state) / 5.0).clamp(0.0, 1.0)
+}
 
-    (hot_margin / 5.0).clamp(0.0, 1.0)
+fn thermal_margin_c(state: EnvironmentState) -> f32 {
+    37.0_f32.min(34.0) - state.tempeh_core_temp_c.max(state.box_air_temp_c)
 }
 
 pub fn report_for_samples(
@@ -281,16 +278,6 @@ pub fn detect_events(samples: &[EnvironmentState], config: ControllerConfig) -> 
         sample.tempeh_core_temp_c >= 35.0
     });
 
-    push_first_matching(
-        &mut events,
-        samples,
-        PetEventKind::SafetyCutoffApproached,
-        |sample| {
-            sample.box_air_temp_c >= config.hard_box_cutoff_c - 0.75
-                || sample.tempeh_core_temp_c >= config.hard_tempeh_cutoff_c - 1.0
-        },
-    );
-
     push_first_matching(&mut events, samples, PetEventKind::Ready, |sample| {
         sample.fermentation_progress >= 0.95
     });
@@ -354,7 +341,7 @@ mod tests {
     #[test]
     fn pet_panics_at_hard_cutoff() {
         let config = ControllerConfig::default();
-        let state = state(30.0, config.hard_tempeh_cutoff_c + 0.1, 0.4, 0.0001);
+        let state = state(30.0, 37.1, 0.4, 0.0001);
         let pet = analyse_pet(state, config, None);
         assert_eq!(pet.mood, TempehMood::Panicking);
     }
@@ -447,7 +434,6 @@ mod tests {
                 PetEventKind::MetabolicHeatDetected,
                 PetEventKind::HeaterMostlyIdle,
                 PetEventKind::GettingSpicy,
-                PetEventKind::SafetyCutoffApproached,
                 PetEventKind::Ready,
             ]
         );

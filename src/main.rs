@@ -776,7 +776,7 @@ fn run_closed_loop_simulation(config: SimConfig) -> Vec<EnvironmentState> {
     let mut samples = vec![simulator.state()];
     while simulator.state().time_s < config.duration_s {
         let state = simulator.state();
-        let heater_on = controller.update(state.box_air_temp_c, state.tempeh_core_temp_c);
+        let heater_on = controller.update(state.box_air_temp_c);
         samples.push(simulator.step(heater_on));
     }
     samples
@@ -822,12 +822,11 @@ fn run_trace_control_test(url_arg: Option<String>) -> Result<(), Box<dyn std::er
     // The values are chosen to produce visible state transitions:
     // - cold readings should turn the heater on
     // - a reading above target + hysteresis should turn it off
-    // - an over-cutoff reading should keep it off
     let trace = TemperatureTrace::new(vec![
         20.0,
         21.0,
         config.controller.target_box_air_temp_c + config.controller.hysteresis_c + 1.0,
-        config.controller.hard_box_cutoff_c + 1.0,
+        config.controller.target_box_air_temp_c,
     ]);
 
     let thermometer = TraceThermometer::new(trace);
@@ -1033,11 +1032,11 @@ fn run_real_control_test(
     eprintln!("Starting real control test.");
     eprintln!("Reading box_air from {source} at {DEFAULT_SERIAL_BAUD} baud.");
     eprintln!("Driving Tasmota plug at {}.", heater.base_url());
-    eprintln!("Using box_air as assumed tempeh/core temperature until the second probe exists.");
+    eprintln!("Using box_air as the control temperature.");
     eprintln!("Saving data to {csv_path}.");
     eprintln!("Press Ctrl-C to stop.");
 
-    let header = "time_s,box_air_temp_c,assumed_tempeh_core_temp_c,heater_on,reason";
+    let header = "time_s,box_air_temp_c,control_temp_c,heater_on,reason";
     let mut csv_log = CsvLog::create(&csv_path, header)?;
 
     // Start from a known safe state.
@@ -1112,14 +1111,8 @@ where
             continue;
         };
         let box_air_temp_c = parsed.temp_c;
-        let assumed_tempeh_core_temp_c = box_air_temp_c;
-        let heater_on = controller.update(box_air_temp_c, assumed_tempeh_core_temp_c);
-        let reason = control_reason(
-            box_air_temp_c,
-            assumed_tempeh_core_temp_c,
-            heater_on,
-            last_heater_on,
-        );
+        let heater_on = controller.update(box_air_temp_c);
+        let reason = control_reason(box_air_temp_c, heater_on, last_heater_on);
 
         if heater_on != last_heater_on {
             heater
@@ -1134,7 +1127,7 @@ where
         }
 
         let row = format!(
-            "{time_s:.0},{box_air_temp_c:.3},{assumed_tempeh_core_temp_c:.3},{heater_on_int},{reason}",
+            "{time_s:.0},{box_air_temp_c:.3},{box_air_temp_c:.3},{heater_on_int},{reason}",
             time_s = start.elapsed().as_secs_f32(),
             heater_on_int = if heater_on { 1 } else { 0 },
         );
@@ -1177,19 +1170,8 @@ impl CsvLog {
     }
 }
 
-fn control_reason(
-    box_air_temp_c: f32,
-    assumed_tempeh_core_temp_c: f32,
-    heater_on: bool,
-    previous_heater_on: bool,
-) -> &'static str {
-    let config = SimConfig::default().controller;
-
-    if box_air_temp_c >= config.hard_box_cutoff_c
-        || assumed_tempeh_core_temp_c >= config.hard_tempeh_cutoff_c
-    {
-        "hard_cutoff"
-    } else if heater_on && !previous_heater_on {
+fn control_reason(_box_air_temp_c: f32, heater_on: bool, previous_heater_on: bool) -> &'static str {
+    if heater_on && !previous_heater_on {
         "below_target"
     } else if !heater_on && previous_heater_on {
         "above_target"
