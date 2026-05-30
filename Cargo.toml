@@ -11,6 +11,12 @@ tempeh-pet = { path = "crates/tempeh-pet" }
 serialport = "4"
 ctrlc = "3"
 chrono = "0.4"
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+async-stream = "0.3"
+futures-util = "0.3"
 
 [workspace]
 members = [

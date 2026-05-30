@@ -1,11 +1,21 @@
+use std::collections::VecDeque;
+use std::convert::Infallible;
 use std::env;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::{Duration, Instant};
 
+use axum::extract::{Query, State};
+use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::response::{Html, IntoResponse};
+use axum::{Json, Router, routing::get};
+use futures_util::Stream;
+use serde::{Deserialize, Serialize};
 use tempeh_control::{
     ControlLoop, ControlReading, Controller, Heater, TasmotaHeater, TraceThermometer,
     parse_temperature_line, run_trace_control,
@@ -13,8 +23,11 @@ use tempeh_control::{
 use tempeh_model::{EnvironmentState, TemperatureProbe, TemperatureReading};
 use tempeh_pet::{PetEvent, PetReport, format_event_time, report_for_samples};
 use tempeh_sim::{SimConfig, Simulator, TemperatureTrace};
+use tokio::sync::broadcast;
 
 const DEFAULT_SERIAL_BAUD: u32 = 115_200;
+const DEFAULT_LIVE_ADDR: &str = "127.0.0.1:8787";
+const LIVE_RING_CAPACITY: usize = 10_800;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let command = env::args().nth(1).unwrap_or_else(|| "html".to_string());
@@ -51,6 +64,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "real-control-test" => {
             run_real_control_test(env::args().nth(2), env::args().nth(3), env::args().nth(4))?;
         }
+        "real-control-live" => {
+            run_real_control_live(env::args().nth(2), env::args().nth(3), env::args().nth(4))?;
+        }
         "ports" | "list-ports" => {
             list_serial_ports(env::args().any(|arg| arg == "--all"))?;
         }
@@ -67,7 +83,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn print_help() {
     eprintln!(
-        "Usage:\n  cargo run                                      # write out/sim.html\n  cargo run -- html                              # write out/sim.html\n  cargo run -- csv                               # print simulation CSV\n  cargo run -- control                           # print simulated control-loop CSV\n  cargo run -- pet                               # print the mycelial pet status\n  cargo run -- ports                             # recommend likely ESP32 serial port\n  cargo run -- ports --all                       # list all available serial ports\n  cargo run -- plug-test <url>                   # turn Tasmota plug on, wait, turn off\n  cargo run -- trace-control-test <url>          # drive Tasmota plug from a short fake temperature trace\n  cargo run -- thermometer-test <port|->         # read labelled temperature lines from serial or stdin\n  cargo run -- real-control-test <port> <url> [csv] # read real probe, drive plug, save CSV\n\nEnvironment:\n  TEMPEH_TASMOTA_URL=http://192.168.1.50"
+        "Usage:\n  cargo run                                           # write out/sim.html\n  cargo run -- html                                   # write out/sim.html\n  cargo run -- csv                                    # print simulation CSV\n  cargo run -- control                                # print simulated control-loop CSV\n  cargo run -- pet                                    # print the mycelial pet status\n  cargo run -- ports                                  # recommend likely ESP32 serial port\n  cargo run -- ports --all                            # list all available serial ports\n  cargo run -- plug-test <url>                        # turn Tasmota plug on, wait, turn off\n  cargo run -- trace-control-test <url>               # drive Tasmota plug from a short fake temperature trace\n  cargo run -- thermometer-test <port|->              # read labelled temperature lines from serial or stdin\n  cargo run -- real-control-test <port> <url> [csv]   # read real probe, drive plug, save CSV\n  cargo run -- real-control-live <port> <url> [csv]   # real control plus live web UI\n\nEnvironment:\n  TEMPEH_TASMOTA_URL=http://192.168.1.50"
     );
 }
 
@@ -912,6 +928,212 @@ impl LatestTemperatureReadings {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct LiveSample {
+    seq: u64,
+    time_s: f32,
+    box_air_temp_c: f32,
+    assumed_tempeh_core_temp_c: f32,
+    heater_on: bool,
+    reason: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct LiveStatus {
+    csv_path: String,
+    sample_count: usize,
+    retained_sample_count: usize,
+    first_retained_seq: Option<u64>,
+    latest: Option<LiveSample>,
+}
+
+#[derive(Debug)]
+struct LiveRunState {
+    csv_path: String,
+    samples: VecDeque<LiveSample>,
+    next_seq: u64,
+}
+
+impl LiveRunState {
+    fn new(csv_path: impl Into<String>) -> Self {
+        Self {
+            csv_path: csv_path.into(),
+            samples: VecDeque::with_capacity(LIVE_RING_CAPACITY),
+            next_seq: 1,
+        }
+    }
+
+    fn push(
+        &mut self,
+        time_s: f32,
+        box_air_temp_c: f32,
+        assumed_tempeh_core_temp_c: f32,
+        heater_on: bool,
+        reason: &'static str,
+    ) -> LiveSample {
+        let sample = LiveSample {
+            seq: self.next_seq,
+            time_s,
+            box_air_temp_c,
+            assumed_tempeh_core_temp_c,
+            heater_on,
+            reason,
+        };
+        self.next_seq = self.next_seq.saturating_add(1);
+
+        if self.samples.len() == LIVE_RING_CAPACITY {
+            self.samples.pop_front();
+        }
+
+        self.samples.push_back(sample.clone());
+        sample
+    }
+
+    fn samples_after(&self, after: u64) -> Vec<LiveSample> {
+        self.samples
+            .iter()
+            .filter(|sample| sample.seq > after)
+            .cloned()
+            .collect()
+    }
+
+    fn status(&self) -> LiveStatus {
+        LiveStatus {
+            csv_path: self.csv_path.clone(),
+            sample_count: self.next_seq.saturating_sub(1) as usize,
+            retained_sample_count: self.samples.len(),
+            first_retained_seq: self.samples.front().map(|sample| sample.seq),
+            latest: self.samples.back().cloned(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct LiveAppState {
+    run: Mutex<LiveRunState>,
+    events: broadcast::Sender<LiveSample>,
+}
+
+impl LiveAppState {
+    fn new(csv_path: impl Into<String>) -> Self {
+        let (events, _receiver) = broadcast::channel(1_024);
+        Self {
+            run: Mutex::new(LiveRunState::new(csv_path)),
+            events,
+        }
+    }
+
+    fn push_sample(
+        &self,
+        time_s: f32,
+        box_air_temp_c: f32,
+        assumed_tempeh_core_temp_c: f32,
+        heater_on: bool,
+        reason: &'static str,
+    ) {
+        let sample = {
+            let mut run = self.run.lock().expect("live state mutex poisoned");
+            run.push(
+                time_s,
+                box_air_temp_c,
+                assumed_tempeh_core_temp_c,
+                heater_on,
+                reason,
+            )
+        };
+
+        // It is fine if no browser is currently connected.
+        let _ = self.events.send(sample);
+    }
+}
+
+type SharedLiveAppState = Arc<LiveAppState>;
+
+#[derive(Debug, Deserialize)]
+struct SamplesQuery {
+    after: Option<u64>,
+}
+
+async fn live_index() -> Html<&'static str> {
+    Html(LIVE_CONTROL_HTML)
+}
+
+async fn live_status(State(state): State<SharedLiveAppState>) -> impl IntoResponse {
+    let run = state.run.lock().expect("live state mutex poisoned");
+    Json(run.status())
+}
+
+async fn live_samples(
+    State(state): State<SharedLiveAppState>,
+    Query(query): Query<SamplesQuery>,
+) -> impl IntoResponse {
+    let after = query.after.unwrap_or(0);
+    let run = state.run.lock().expect("live state mutex poisoned");
+    Json(run.samples_after(after))
+}
+
+async fn live_events(
+    State(state): State<SharedLiveAppState>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let mut receiver = state.events.subscribe();
+
+    let stream = async_stream::stream! {
+        loop {
+            match receiver.recv().await {
+                Ok(sample) => {
+                    let Ok(json) = serde_json::to_string(&sample) else {
+                        continue;
+                    };
+
+                    yield Ok(Event::default()
+                        .event("sample")
+                        .id(sample.seq.to_string())
+                        .data(json));
+                }
+                Err(broadcast::error::RecvError::Lagged(_missed)) => {
+                    yield Ok(Event::default().event("resync").data("lagged"));
+                }
+                Err(broadcast::error::RecvError::Closed) => {
+                    break;
+                }
+            }
+        }
+    };
+
+    Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(10))
+            .text("keep-alive"),
+    )
+}
+
+fn spawn_live_server(
+    state: SharedLiveAppState,
+    addr: SocketAddr,
+) -> thread::JoinHandle<Result<(), String>> {
+    thread::spawn(move || {
+        let runtime = tokio::runtime::Runtime::new()
+            .map_err(|error| format!("failed to create Tokio runtime: {error}"))?;
+
+        runtime.block_on(async move {
+            let app = Router::new()
+                .route("/", get(live_index))
+                .route("/api/status", get(live_status))
+                .route("/api/samples", get(live_samples))
+                .route("/events", get(live_events))
+                .with_state(state);
+
+            let listener = tokio::net::TcpListener::bind(addr)
+                .await
+                .map_err(|error| format!("failed to bind live UI at http://{addr}: {error}"))?;
+
+            axum::serve(listener, app)
+                .await
+                .map_err(|error| format!("live UI server failed: {error}"))
+        })
+    })
+}
+
 fn run_thermometer_test(source_arg: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     let source = source_arg.ok_or_else(|| {
         std::io::Error::new(
@@ -1036,7 +1258,7 @@ fn run_real_control_test(
     eprintln!("Saving data to {csv_path}.");
     eprintln!("Press Ctrl-C to stop.");
 
-    let header = "time_s,box_air_temp_c,control_temp_c,heater_on,reason";
+    let header = "time_s,box_air_temp_c,assumed_tempeh_core_temp_c,heater_on,reason";
     let mut csv_log = CsvLog::create(&csv_path, header)?;
 
     // Start from a known safe state.
@@ -1051,6 +1273,7 @@ fn run_real_control_test(
         Arc::clone(&stop_requested),
         header,
         &mut csv_log,
+        None,
     );
 
     eprintln!("Sending final off command.");
@@ -1064,12 +1287,101 @@ fn run_real_control_test(
     Ok(())
 }
 
+fn run_real_control_live(
+    source_arg: Option<String>,
+    url_arg: Option<String>,
+    csv_arg: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let source = source_arg.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "provide an ESP32 serial port, e.g. cargo run -- real-control-live /dev/cu.usbmodem1234561 http://192.168.1.50",
+        )
+    })?;
+    let base_url = tasmota_base_url(url_arg)?;
+    let csv_path = csv_arg.unwrap_or_else(default_real_control_csv_path);
+    let addr: SocketAddr = DEFAULT_LIVE_ADDR.parse()?;
+
+    let port = serialport::new(&source, DEFAULT_SERIAL_BAUD)
+        .timeout(Duration::from_millis(2_000))
+        .open()
+        .map_err(|error| {
+            std::io::Error::other(format!(
+                "failed to open serial port {source} at {DEFAULT_SERIAL_BAUD} baud: {error}"
+            ))
+        })?;
+
+    let stop_requested = Arc::new(AtomicBool::new(false));
+    {
+        let stop_requested = Arc::clone(&stop_requested);
+        ctrlc::set_handler(move || {
+            stop_requested.store(true, Ordering::SeqCst);
+        })
+        .map_err(|error| {
+            std::io::Error::other(format!("failed to install Ctrl-C handler: {error}"))
+        })?;
+    }
+
+    let header = "time_s,box_air_temp_c,assumed_tempeh_core_temp_c,heater_on,reason";
+    let mut csv_log = CsvLog::create(&csv_path, header)?;
+    let live_state = Arc::new(LiveAppState::new(csv_path.clone()));
+    let server_handle = spawn_live_server(Arc::clone(&live_state), addr);
+
+    let mut heater = TasmotaHeater::new(base_url);
+    eprintln!("Starting live real control test.");
+    eprintln!("Reading box_air from {source} at {DEFAULT_SERIAL_BAUD} baud.");
+    eprintln!("Driving Tasmota plug at {}.", heater.base_url());
+    eprintln!("Using box_air as assumed tempeh/core temperature until the second probe exists.");
+    eprintln!("Saving data to {csv_path}.");
+    eprintln!("Live UI: http://{addr}");
+    eprintln!("Press Ctrl-C to stop.");
+
+    // Give the server thread a chance to fail fast on bind errors before we start heating.
+    thread::sleep(Duration::from_millis(100));
+    if server_handle.is_finished() {
+        match server_handle.join() {
+            Ok(Err(error)) => return Err(std::io::Error::other(error).into()),
+            Ok(Ok(())) => {
+                return Err(std::io::Error::other("live UI server stopped unexpectedly").into());
+            }
+            Err(_) => {
+                return Err(std::io::Error::other("live UI server thread panicked").into());
+            }
+        }
+    }
+
+    eprintln!("Sending initial off command.");
+    heater
+        .set_heater(false)
+        .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
+
+    let result = run_real_control_test_loop(
+        BufReader::new(port),
+        &mut heater,
+        Arc::clone(&stop_requested),
+        header,
+        &mut csv_log,
+        Some(Arc::clone(&live_state)),
+    );
+
+    eprintln!("Sending final off command.");
+    let shutdown_result = heater
+        .set_heater(false)
+        .map_err(|error| std::io::Error::other(format!("{error:?}")));
+
+    result?;
+    shutdown_result?;
+    eprintln!("Live real control test stopped. Final command sent: off.");
+    Ok(())
+}
+
 fn run_real_control_test_loop<R>(
     mut reader: R,
     heater: &mut TasmotaHeater,
     stop_requested: Arc<AtomicBool>,
     header: &str,
     csv_log: &mut CsvLog,
+    live_state: Option<SharedLiveAppState>,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
     R: BufRead,
@@ -1111,6 +1423,7 @@ where
             continue;
         };
         let box_air_temp_c = parsed.temp_c;
+        let assumed_tempeh_core_temp_c = box_air_temp_c;
         let heater_on = controller.update(box_air_temp_c);
         let reason = control_reason(box_air_temp_c, heater_on, last_heater_on);
 
@@ -1126,13 +1439,23 @@ where
             printed_header = true;
         }
 
+        let time_s = start.elapsed().as_secs_f32();
         let row = format!(
-            "{time_s:.0},{box_air_temp_c:.3},{box_air_temp_c:.3},{heater_on_int},{reason}",
-            time_s = start.elapsed().as_secs_f32(),
+            "{time_s:.0},{box_air_temp_c:.3},{assumed_tempeh_core_temp_c:.3},{heater_on_int},{reason}",
             heater_on_int = if heater_on { 1 } else { 0 },
         );
         println!("{row}");
         csv_log.write_row(&row)?;
+
+        if let Some(live_state) = live_state.as_ref() {
+            live_state.push_sample(
+                time_s,
+                box_air_temp_c,
+                assumed_tempeh_core_temp_c,
+                heater_on,
+                reason,
+            );
+        }
     }
 
     if !printed_header {
@@ -1186,6 +1509,320 @@ fn default_real_control_csv_path() -> String {
     let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
     format!("out/real-control-test-{timestamp}.csv")
 }
+
+const LIVE_CONTROL_HTML: &str = r#"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tempeh OS live control</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f8f5ee;
+  --fg: #211d17;
+  --muted: #6b6258;
+  --card: #fffaf1;
+  --line: #d8ccba;
+  --hot: #c6632b;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #151311;
+    --fg: #eee7dc;
+    --muted: #aaa096;
+    --card: #201d19;
+    --line: #3a332b;
+    --hot: #f6a15f;
+  }
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+}
+main {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 28px 18px 48px;
+}
+h1 {
+  margin: 0 0 6px;
+  font-size: 2rem;
+}
+.sub {
+  margin: 0 0 22px;
+  color: var(--muted);
+}
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 14px;
+}
+.label {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.value {
+  margin-top: 6px;
+  font-size: 1.45rem;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+.chart {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 12px;
+  overflow-x: auto;
+}
+svg {
+  width: 100%;
+  min-width: 720px;
+  height: auto;
+}
+.muted {
+  color: var(--muted);
+}
+code {
+  background: color-mix(in srgb, var(--card) 70%, var(--line));
+  padding: 2px 5px;
+  border-radius: 6px;
+}
+</style>
+</head>
+<body>
+<main>
+  <h1>Tempeh OS live control</h1>
+  <p class="sub">Live box-air temperature and heater state from the supervised host control loop.</p>
+
+  <section class="cards">
+    <div class="card">
+      <div class="label">Box air</div>
+      <div class="value" id="latest-temp">—</div>
+    </div>
+    <div class="card">
+      <div class="label">Heater</div>
+      <div class="value" id="heater">—</div>
+    </div>
+    <div class="card">
+      <div class="label">Elapsed</div>
+      <div class="value" id="elapsed">—</div>
+    </div>
+    <div class="card">
+      <div class="label">Samples</div>
+      <div class="value" id="sample-count">0</div>
+    </div>
+    <div class="card">
+      <div class="label">Stream</div>
+      <div class="value" id="stream-state">connecting</div>
+    </div>
+  </section>
+
+  <section class="chart">
+    <svg id="chart" viewBox="0 0 900 420" role="img" aria-label="Box temperature and heater state over time">
+      <text x="64" y="28" font-size="20" font-weight="700" fill="currentColor">Box temperature + heater</text>
+      <text x="18" y="210" font-size="13" fill="currentColor" transform="rotate(-90 18 210)">Temperature °C</text>
+      <g id="plot"></g>
+    </svg>
+  </section>
+
+  <p class="muted">
+    CSV: <code id="csv-path">loading…</code>
+  </p>
+</main>
+
+<script>
+const samples = [];
+let lastSeq = 0;
+let source = null;
+
+const ids = {
+  latestTemp: document.getElementById("latest-temp"),
+  heater: document.getElementById("heater"),
+  elapsed: document.getElementById("elapsed"),
+  sampleCount: document.getElementById("sample-count"),
+  streamState: document.getElementById("stream-state"),
+  csvPath: document.getElementById("csv-path"),
+  plot: document.getElementById("plot"),
+};
+
+function fmtElapsed(seconds) {
+  const total = Math.max(0, Math.round(seconds));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h > 0) return `${h}h ${String(m).padStart(2, "0")}m`;
+  return `${m}m ${String(s).padStart(2, "0")}s`;
+}
+
+function appendSample(sample) {
+  if (sample.seq <= lastSeq) return;
+  samples.push(sample);
+  lastSeq = Math.max(lastSeq, sample.seq);
+}
+
+async function updateStatus() {
+  const statusResponse = await fetch("/api/status", { cache: "no-store" });
+  if (!statusResponse.ok) return;
+
+  const status = await statusResponse.json();
+  ids.csvPath.textContent = status.csv_path;
+
+  if (status.first_retained_seq !== null && lastSeq > 0 && lastSeq < status.first_retained_seq - 1) {
+    console.warn("Browser fell behind retained live history; CSV remains the durable full log.");
+  }
+}
+
+async function catchUp(after = lastSeq) {
+  const response = await fetch(`/api/samples?after=${after}`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`sample request failed: ${response.status}`);
+
+  const incoming = await response.json();
+  for (const sample of incoming) {
+    appendSample(sample);
+  }
+
+  await updateStatus();
+  render();
+}
+
+function connectEvents() {
+  if (source !== null) {
+    source.close();
+  }
+
+  source = new EventSource("/events");
+
+  source.onopen = () => {
+    ids.streamState.textContent = "live";
+    catchUp(lastSeq).catch(error => console.error(error));
+  };
+
+  source.addEventListener("sample", event => {
+    appendSample(JSON.parse(event.data));
+    render();
+  });
+
+  source.addEventListener("resync", () => {
+    ids.streamState.textContent = "resync";
+    catchUp(lastSeq).catch(error => console.error(error));
+  });
+
+  source.onerror = () => {
+    ids.streamState.textContent = "reconnecting";
+    // EventSource reconnects automatically. On open, catchUp(lastSeq) fills
+    // anything that arrived while the browser was disconnected.
+  };
+}
+
+function render() {
+  ids.sampleCount.textContent = String(samples.length);
+
+  const latest = samples[samples.length - 1];
+  if (!latest) {
+    ids.plot.innerHTML = `<text x="64" y="210" fill="currentColor" opacity="0.6">Waiting for temperature readings…</text>`;
+    return;
+  }
+
+  ids.latestTemp.textContent = `${latest.box_air_temp_c.toFixed(2)} °C`;
+  ids.heater.textContent = latest.heater_on ? "on" : "off";
+  ids.elapsed.textContent = fmtElapsed(latest.time_s);
+
+  const width = 900;
+  const height = 420;
+  const margin = { left: 64, right: 24, top: 48, bottom: 54 };
+  const plotW = width - margin.left - margin.right;
+  const plotH = height - margin.top - margin.bottom;
+
+  const visible = samples.slice(-900);
+  const tMin = visible[0].time_s;
+  const tMax = Math.max(tMin + 1, visible[visible.length - 1].time_s);
+  let yMin = Math.min(...visible.map(s => s.box_air_temp_c));
+  let yMax = Math.max(...visible.map(s => s.box_air_temp_c));
+  if (Math.abs(yMax - yMin) < 0.5) {
+    yMin -= 0.5;
+    yMax += 0.5;
+  }
+  const pad = Math.max(0.25, (yMax - yMin) * 0.12);
+  yMin -= pad;
+  yMax += pad;
+
+  const x = t => margin.left + ((t - tMin) / (tMax - tMin)) * plotW;
+  const y = v => margin.top + (1 - ((v - yMin) / (yMax - yMin))) * plotH;
+
+  let grid = "";
+  for (let i = 0; i <= 4; i++) {
+    const p = i / 4;
+    const gx = margin.left + p * plotW;
+    const seconds = tMin + p * (tMax - tMin);
+    grid += `<line x1="${gx.toFixed(1)}" y1="${margin.top}" x2="${gx.toFixed(1)}" y2="${margin.top + plotH}" stroke="currentColor" opacity="0.08"/>`;
+    grid += `<text x="${gx.toFixed(1)}" y="${height - 24}" text-anchor="middle" font-size="12" fill="currentColor">${fmtElapsed(seconds)}</text>`;
+  }
+  for (let i = 0; i <= 4; i++) {
+    const p = i / 4;
+    const gy = margin.top + p * plotH;
+    const value = yMax - p * (yMax - yMin);
+    grid += `<line x1="${margin.left}" y1="${gy.toFixed(1)}" x2="${width - margin.right}" y2="${gy.toFixed(1)}" stroke="currentColor" opacity="0.08"/>`;
+    grid += `<text x="${margin.left - 8}" y="${(gy + 4).toFixed(1)}" text-anchor="end" font-size="12" fill="currentColor">${value.toFixed(1)}</text>`;
+  }
+
+  let heaterBands = "";
+  let bandStart = null;
+  for (const sample of visible) {
+    if (sample.heater_on && bandStart === null) bandStart = sample.time_s;
+    if (!sample.heater_on && bandStart !== null) {
+      const x0 = x(bandStart);
+      const x1 = x(sample.time_s);
+      heaterBands += `<rect x="${x0.toFixed(1)}" y="${margin.top}" width="${Math.max(1, x1 - x0).toFixed(1)}" height="${plotH}" fill="var(--hot)" opacity="0.16"/>`;
+      bandStart = null;
+    }
+  }
+  if (bandStart !== null) {
+    const x0 = x(bandStart);
+    const x1 = x(tMax);
+    heaterBands += `<rect x="${x0.toFixed(1)}" y="${margin.top}" width="${Math.max(1, x1 - x0).toFixed(1)}" height="${plotH}" fill="var(--hot)" opacity="0.16"/>`;
+  }
+
+  const path = visible.map((sample, index) => {
+    const command = index === 0 ? "M" : "L";
+    return `${command} ${x(sample.time_s).toFixed(2)} ${y(sample.box_air_temp_c).toFixed(2)}`;
+  }).join(" ");
+
+  const latestX = x(latest.time_s);
+  const latestY = y(latest.box_air_temp_c);
+
+  ids.plot.innerHTML = `
+    ${grid}
+    ${heaterBands}
+    <line x1="${margin.left}" y1="${margin.top + plotH}" x2="${width - margin.right}" y2="${margin.top + plotH}" stroke="currentColor" opacity="0.35"/>
+    <path d="${path}" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="${latestX.toFixed(1)}" cy="${latestY.toFixed(1)}" r="4.5" fill="currentColor"/>
+    <rect x="${margin.left}" y="${height - 48}" width="14" height="14" rx="4" fill="var(--hot)" opacity="0.35"/>
+    <text x="${margin.left + 22}" y="${height - 36}" font-size="13" fill="currentColor">heater on</text>
+  `;
+}
+
+catchUp(0).catch(error => console.error(error));
+connectEvents();
+setInterval(() => {
+  updateStatus().catch(error => console.error(error));
+}, 5000);
+</script>
+</body>
+</html>
+"#;
 
 fn list_serial_ports(show_all: bool) -> Result<(), Box<dyn std::error::Error>> {
     let ports = serialport::available_ports()

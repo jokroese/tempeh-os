@@ -111,6 +111,20 @@ Use a named file for a supervised heat-mat run:
 cargo run -- real-control-test /dev/cu.usbmodem1234561 http://192.168.8.193 out/heat-mat-empty-box-01.csv
 ```
 
+## Live real control UI
+
+`real-control-live` runs the same supervised host control loop as `real-control-test`, writes the same CSV log, and serves a local live chart:
+
+```bash
+cargo run -- real-control-live /dev/cu.usbmodem1234561 http://192.168.8.193
+```
+
+Open:
+
+```text
+http://127.0.0.1:8787
+```
+
 Press Ctrl-C to stop. The command will try to leave the plug off before exiting.
 
 ## Real thermometer smoke test
