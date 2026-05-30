@@ -93,8 +93,22 @@ temp,box_air,22.437
 
 For this first real control test, the single `box_air` probe is also used as the assumed tempeh/core temperature.
 
+It writes the control log to stdout and to a CSV file:
+
 ```bash
 cargo run -- real-control-test /dev/cu.usbmodem1234561 http://192.168.8.193
+```
+
+Default output (timestamped so runs do not overwrite each other):
+
+```text
+out/real-control-test-20260529-205812.csv
+```
+
+Use a named file for a supervised heat-mat run:
+
+```bash
+cargo run -- real-control-test /dev/cu.usbmodem1234561 http://192.168.8.193 out/heat-mat-empty-box-01.csv
 ```
 
 Press Ctrl-C to stop. The command will try to leave the plug off before exiting.

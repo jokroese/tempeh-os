@@ -10,6 +10,7 @@ tempeh-control = { path = "crates/tempeh-control" }
 tempeh-pet = { path = "crates/tempeh-pet" }
 serialport = "4"
 ctrlc = "3"
+chrono = "0.4"
 
 [workspace]
 members = [

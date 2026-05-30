@@ -1,7 +1,7 @@
 use std::env;
-use std::fs;
-use std::io::{self, BufRead, BufReader};
-use std::path::Path;
+use std::fs::{self, File};
+use std::io::{self, BufRead, BufReader, BufWriter, Write};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -49,7 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             run_thermometer_test(env::args().nth(2))?;
         }
         "real-control-test" => {
-            run_real_control_test(env::args().nth(2), env::args().nth(3))?;
+            run_real_control_test(env::args().nth(2), env::args().nth(3), env::args().nth(4))?;
         }
         "ports" | "list-ports" => {
             list_serial_ports(env::args().any(|arg| arg == "--all"))?;
@@ -67,7 +67,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn print_help() {
     eprintln!(
-        "Usage:\n  cargo run                               # write out/sim.html\n  cargo run -- html                       # write out/sim.html\n  cargo run -- csv                        # print simulation CSV\n  cargo run -- control                    # print simulated control-loop CSV\n  cargo run -- pet                        # print the mycelial pet status\n  cargo run -- ports                      # recommend likely ESP32 serial port\n  cargo run -- ports --all                # list all available serial ports\n  cargo run -- plug-test <url>            # turn Tasmota plug on, wait, turn off\n  cargo run -- trace-control-test <url>   # drive Tasmota plug from a short fake temperature trace\n  cargo run -- thermometer-test <port|->  # read labelled temperature lines from serial or stdin\n  cargo run -- real-control-test <port> <url> # drive Tasmota plug from real ESP32 temperature\n\nEnvironment:\n  TEMPEH_TASMOTA_URL=http://192.168.1.50"
+        "Usage:\n  cargo run                                      # write out/sim.html\n  cargo run -- html                              # write out/sim.html\n  cargo run -- csv                               # print simulation CSV\n  cargo run -- control                           # print simulated control-loop CSV\n  cargo run -- pet                               # print the mycelial pet status\n  cargo run -- ports                             # recommend likely ESP32 serial port\n  cargo run -- ports --all                       # list all available serial ports\n  cargo run -- plug-test <url>                   # turn Tasmota plug on, wait, turn off\n  cargo run -- trace-control-test <url>          # drive Tasmota plug from a short fake temperature trace\n  cargo run -- thermometer-test <port|->         # read labelled temperature lines from serial or stdin\n  cargo run -- real-control-test <port> <url> [csv] # read real probe, drive plug, save CSV\n\nEnvironment:\n  TEMPEH_TASMOTA_URL=http://192.168.1.50"
     );
 }
 
@@ -999,14 +999,16 @@ where
 fn run_real_control_test(
     source_arg: Option<String>,
     url_arg: Option<String>,
+    csv_arg: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let source = source_arg.ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "provide an ESP32 serial port, e.g. cargo run -- real-control-test /dev/cu.usbmodem1234561 http://192.168.1.50",
+            "provide an ESP32 serial port, e.g. cargo run -- real-control-test /dev/cu.usbmodem1234561 http://192.168.1.50 out/heat-mat-test.csv",
         )
     })?;
     let base_url = tasmota_base_url(url_arg)?;
+    let csv_path = csv_arg.unwrap_or_else(default_real_control_csv_path);
     let port = serialport::new(&source, DEFAULT_SERIAL_BAUD)
         .timeout(Duration::from_millis(2_000))
         .open()
@@ -1032,7 +1034,11 @@ fn run_real_control_test(
     eprintln!("Reading box_air from {source} at {DEFAULT_SERIAL_BAUD} baud.");
     eprintln!("Driving Tasmota plug at {}.", heater.base_url());
     eprintln!("Using box_air as assumed tempeh/core temperature until the second probe exists.");
+    eprintln!("Saving data to {csv_path}.");
     eprintln!("Press Ctrl-C to stop.");
+
+    let header = "time_s,box_air_temp_c,assumed_tempeh_core_temp_c,heater_on,reason";
+    let mut csv_log = CsvLog::create(&csv_path, header)?;
 
     // Start from a known safe state.
     eprintln!("Sending initial off command.");
@@ -1044,6 +1050,8 @@ fn run_real_control_test(
         BufReader::new(port),
         &mut heater,
         Arc::clone(&stop_requested),
+        header,
+        &mut csv_log,
     );
 
     eprintln!("Sending final off command.");
@@ -1061,6 +1069,8 @@ fn run_real_control_test_loop<R>(
     mut reader: R,
     heater: &mut TasmotaHeater,
     stop_requested: Arc<AtomicBool>,
+    header: &str,
+    csv_log: &mut CsvLog,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
     R: BufRead,
@@ -1070,6 +1080,7 @@ where
     let start = Instant::now();
     let mut line = String::new();
     let mut printed_header = false;
+    let mut last_heater_on = false;
 
     while !stop_requested.load(Ordering::SeqCst) {
         line.clear();
@@ -1103,26 +1114,95 @@ where
         let box_air_temp_c = parsed.temp_c;
         let assumed_tempeh_core_temp_c = box_air_temp_c;
         let heater_on = controller.update(box_air_temp_c, assumed_tempeh_core_temp_c);
-        heater
-            .set_heater(heater_on)
-            .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
-        if !printed_header {
-            println!("time_s,box_air_temp_c,assumed_tempeh_core_temp_c,heater_on");
-            printed_header = true;
-        }
-        println!(
-            "{:.0},{:.3},{:.3},{}",
-            start.elapsed().as_secs_f32(),
+        let reason = control_reason(
             box_air_temp_c,
             assumed_tempeh_core_temp_c,
-            if heater_on { 1 } else { 0 }
+            heater_on,
+            last_heater_on,
         );
+
+        if heater_on != last_heater_on {
+            heater
+                .set_heater(heater_on)
+                .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
+            last_heater_on = heater_on;
+        }
+
+        if !printed_header {
+            println!("{header}");
+            printed_header = true;
+        }
+
+        let row = format!(
+            "{time_s:.0},{box_air_temp_c:.3},{assumed_tempeh_core_temp_c:.3},{heater_on_int},{reason}",
+            time_s = start.elapsed().as_secs_f32(),
+            heater_on_int = if heater_on { 1 } else { 0 },
+        );
+        println!("{row}");
+        csv_log.write_row(&row)?;
     }
 
     if !printed_header {
         eprintln!("No box_air temperature reading received.");
     }
     Ok(())
+}
+
+struct CsvLog {
+    writer: BufWriter<File>,
+}
+
+impl CsvLog {
+    fn create(path: impl Into<PathBuf>, header: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let path = path.into();
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        let file = File::create(&path)?;
+        let mut writer = BufWriter::new(file);
+        writeln!(writer, "{header}")?;
+        writer.flush()?;
+        eprintln!("Saving CSV log to {}.", path.display());
+        Ok(Self { writer })
+    }
+
+    fn write_row(&mut self, row: &str) -> Result<(), Box<dyn std::error::Error>> {
+        writeln!(self.writer, "{row}")?;
+        // Supervised hardware tests are often stopped with Ctrl-C.
+        // Flush every row so the file remains useful after interruption.
+        self.writer.flush()?;
+        Ok(())
+    }
+}
+
+fn control_reason(
+    box_air_temp_c: f32,
+    assumed_tempeh_core_temp_c: f32,
+    heater_on: bool,
+    previous_heater_on: bool,
+) -> &'static str {
+    let config = SimConfig::default().controller;
+
+    if box_air_temp_c >= config.hard_box_cutoff_c
+        || assumed_tempeh_core_temp_c >= config.hard_tempeh_cutoff_c
+    {
+        "hard_cutoff"
+    } else if heater_on && !previous_heater_on {
+        "below_target"
+    } else if !heater_on && previous_heater_on {
+        "above_target"
+    } else if heater_on {
+        "holding_on"
+    } else {
+        "holding_off"
+    }
+}
+
+fn default_real_control_csv_path() -> String {
+    let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    format!("out/real-control-test-{timestamp}.csv")
 }
 
 fn list_serial_ports(show_all: bool) -> Result<(), Box<dyn std::error::Error>> {
