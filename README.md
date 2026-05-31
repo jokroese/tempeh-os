@@ -15,7 +15,7 @@ The physical prototype is documented in `docs/hardware/`. Hardware v0 is a proto
 - `tempeh-protocol` owns shared text protocols such as `temp,<probe>,<°C>` lines.
 - `tempeh-pet` owns the mycelial status report.
 - `tempeh-host` owns the laptop-side CLI, serial reader, CSV logging, Tasmota HTTP control, and live UI.
-- `tempeh-firmware-esp32` owns ESP32 probe firmware.
+- `tempeh-firmware-esp32` owns ESP32-side probe reading and on-device real-run policy evaluation.
 
 ## Run
 
@@ -94,6 +94,15 @@ temp,product,23.125
 ```
 
 Probe GPIO mapping: box_air → GPIO5, room_air → GPIO6, product → GPIO4.
+
+The firmware also runs the shared real-run policy on device and emits diagnostic control rows:
+
+```text
+control,time_s,room_air_temp_c,box_air_temp_c,product_temp_c,heater_on,reason
+control,1,,22.437,23.125,1,below_target
+```
+
+These rows show what the ESP32 would do, but the firmware does not actuate the heater yet.
 
 ## Real control smoke test
 

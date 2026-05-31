@@ -3,14 +3,14 @@ use esp_idf_hal::delay::{Ets, FreeRtos};
 use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_svc::log::EspLogger;
 use esp_idf_sys::{
-    esp, gpio_config, gpio_config_t, gpio_get_level, gpio_int_type_t_GPIO_INTR_DISABLE,
-    gpio_mode_t_GPIO_MODE_INPUT_OUTPUT_OD, gpio_num_t, gpio_pulldown_t_GPIO_PULLDOWN_DISABLE,
-    gpio_pullup_t_GPIO_PULLUP_ENABLE, gpio_set_level,
+    esp, esp_timer_get_time, gpio_config, gpio_config_t, gpio_get_level,
+    gpio_int_type_t_GPIO_INTR_DISABLE, gpio_mode_t_GPIO_MODE_INPUT_OUTPUT_OD, gpio_num_t,
+    gpio_pulldown_t_GPIO_PULLDOWN_DISABLE, gpio_pullup_t_GPIO_PULLUP_ENABLE, gpio_set_level,
 };
 use log::{info, warn};
 use tempeh_model::TemperatureProbe;
 use tempeh_protocol::format_temperature_line;
-use tempeh_runtime::{LatestTemperatureReadings, RealRunConfig, RealRunController};
+use tempeh_runtime::{LatestTemperatureReadings, RealRunConfig, RealRunController, RealRunSample};
 
 const BOX_AIR_GPIO: i32 = 5;
 const ROOM_AIR_GPIO: i32 = 6;
@@ -24,8 +24,6 @@ fn main() -> Result<()> {
     esp_idf_svc::sys::link_patches();
     EspLogger::initialize_default();
 
-    log_runtime_policy_smoke_check();
-
     let peripherals = Peripherals::take()?;
     let _box_air_pin = peripherals.pins.gpio5;
     let _room_air_pin = peripherals.pins.gpio6;
@@ -35,50 +33,83 @@ fn main() -> Result<()> {
     let mut room_air = Ds18b20::new(ROOM_AIR_GPIO)?;
     let mut product = Ds18b20::new(PRODUCT_GPIO)?;
 
+    let mut latest = LatestTemperatureReadings::new();
+    let mut controller = RealRunController::new(RealRunConfig::default());
+    let start_us = now_us();
+
     info!("Tempeh OS ESP32 temperature bridge");
     info!("box_air DATA -> GPIO{BOX_AIR_GPIO}");
     info!("room_air DATA -> GPIO{ROOM_AIR_GPIO}");
     info!("product DATA -> GPIO{PRODUCT_GPIO}");
     info!("reading three DS18B20 probes on separate 1-Wire buses");
+    info!("running shared real-run policy on device");
+    info!(
+        "control output: control,time_s,room_air_temp_c,box_air_temp_c,product_temp_c,heater_on,reason"
+    );
 
     loop {
-        read_and_print(TemperatureProbe::BoxAir, &mut box_air);
-        read_and_print(TemperatureProbe::RoomAir, &mut room_air);
-        read_and_print(TemperatureProbe::Product, &mut product);
+        read_update_and_print(
+            TemperatureProbe::BoxAir,
+            &mut box_air,
+            &mut latest,
+            &mut controller,
+            start_us,
+        );
+        read_update_and_print(
+            TemperatureProbe::RoomAir,
+            &mut room_air,
+            &mut latest,
+            &mut controller,
+            start_us,
+        );
+        read_update_and_print(
+            TemperatureProbe::Product,
+            &mut product,
+            &mut latest,
+            &mut controller,
+            start_us,
+        );
 
         FreeRtos::delay_ms(2_000);
     }
 }
 
-fn log_runtime_policy_smoke_check() {
-    let mut latest = LatestTemperatureReadings::new();
-    latest.update_at(0.0, TemperatureProbe::BoxAir, 20.0);
-    latest.update_at(0.0, TemperatureProbe::Product, 20.0);
-
-    let Some(snapshot) = latest.snapshot_for_update_at(0.0, TemperatureProbe::BoxAir) else {
-        warn!("shared runtime policy smoke check could not create snapshot");
-        return;
-    };
-
-    let mut controller = RealRunController::new(RealRunConfig::default());
-    let decision = controller.update(snapshot);
-
-    info!(
-        "shared runtime policy smoke check: heater_on={}, reason={}",
-        if decision.heater_on { 1 } else { 0 },
-        decision.reason
-    );
-}
-
-fn read_and_print(probe_kind: TemperatureProbe, probe: &mut Ds18b20) {
+fn read_update_and_print(
+    probe_kind: TemperatureProbe,
+    probe: &mut Ds18b20,
+    latest: &mut LatestTemperatureReadings,
+    controller: &mut RealRunController,
+    start_us: i64,
+) {
     match probe.read_temperature_c() {
         Ok(temp_c) => {
+            let time_s = elapsed_s(start_us);
+
             println!("{}", format_temperature_line(probe_kind, temp_c));
+
+            latest.update_at(time_s, probe_kind, temp_c);
+
+            if let Some(sample) = controller.update_sample(time_s, latest, probe_kind) {
+                println!("{}", control_sample_line(sample));
+            }
         }
         Err(error) => {
             warn!("{probe_kind:?} read failed: {error:#}");
         }
     }
+}
+
+fn control_sample_line(sample: RealRunSample) -> String {
+    format!("control,{}", sample.csv_row())
+}
+
+fn now_us() -> i64 {
+    unsafe { esp_timer_get_time() }
+}
+
+fn elapsed_s(start_us: i64) -> f32 {
+    let elapsed_us = now_us().saturating_sub(start_us);
+    elapsed_us as f32 / 1_000_000.0
 }
 
 struct Ds18b20 {
