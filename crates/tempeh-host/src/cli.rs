@@ -13,7 +13,7 @@ use tempeh_control::{
 };
 use tempeh_model::{EnvironmentState, TemperatureReading};
 use tempeh_pet::{PetEvent, PetReport, format_event_time, report_for_samples};
-use tempeh_runtime::{LatestTemperatureReadings, RealRunConfig, RealRunController};
+use tempeh_runtime::{LatestTemperatureReadings, RealRunConfig, RealRunController, RealRunSample};
 use tempeh_sim::{SimConfig, Simulator, TemperatureTrace};
 
 use crate::csv_log::CsvLog;
@@ -914,7 +914,7 @@ fn run_real_control_test(
     eprintln!("Saving data to {csv_path}.");
     eprintln!("Press Ctrl-C to stop.");
 
-    let header = "time_s,room_air_temp_c,box_air_temp_c,product_temp_c,heater_on,reason";
+    let header = RealRunSample::csv_header();
     let mut csv_log = CsvLog::create(&csv_path, header)?;
 
     // Start from a known safe state.
@@ -978,7 +978,7 @@ fn run_real_control_live(
         })?;
     }
 
-    let header = "time_s,room_air_temp_c,box_air_temp_c,product_temp_c,heater_on,reason";
+    let header = RealRunSample::csv_header();
     let mut csv_log = CsvLog::create(&csv_path, header)?;
     let live_state = Arc::new(LiveAppState::new(csv_path.clone()));
     let server_handle = spawn_live_server(Arc::clone(&live_state), addr);
@@ -1082,22 +1082,15 @@ where
         let time_s = start.elapsed().as_secs_f32();
         latest.update_at(time_s, parsed.probe, parsed.temp_c);
 
-        let Some(box_air_temp_c) = latest.box_air_temp_c else {
+        let Some(sample) = controller.update_sample(time_s, &latest, parsed.probe) else {
             continue;
         };
-        let product_temp_c = latest.product_temp_c;
-        let Some(snapshot) = latest.snapshot_for_update_at(time_s, parsed.probe) else {
-            continue;
-        };
-        let decision = controller.update(snapshot);
-        let heater_on = decision.heater_on;
-        let reason = decision.reason;
 
-        if heater_on != last_heater_on {
+        if sample.heater_on != last_heater_on {
             heater
-                .set_heater(heater_on)
+                .set_heater(sample.heater_on)
                 .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
-            last_heater_on = heater_on;
+            last_heater_on = sample.heater_on;
         }
 
         if !printed_header {
@@ -1105,28 +1098,18 @@ where
             printed_header = true;
         }
 
-        let room_air_temp_c = latest.room_air_temp_c;
-        let room_air_text = room_air_temp_c
-            .map(|temp| format!("{temp:.3}"))
-            .unwrap_or_default();
-        let product_text = product_temp_c
-            .map(|temp| format!("{temp:.3}"))
-            .unwrap_or_default();
-        let row = format!(
-            "{time_s:.0},{room_air_text},{box_air_temp_c:.3},{product_text},{heater_on_int},{reason}",
-            heater_on_int = if heater_on { 1 } else { 0 },
-        );
+        let row = sample.csv_row();
         println!("{row}");
         csv_log.write_row(&row)?;
 
         if let Some(live_state) = live_state.as_ref() {
             live_state.push_sample(
-                time_s,
-                room_air_temp_c,
-                box_air_temp_c,
-                product_temp_c,
-                heater_on,
-                reason,
+                sample.time_s,
+                sample.room_air_temp_c,
+                sample.box_air_temp_c,
+                sample.product_temp_c,
+                sample.heater_on,
+                sample.reason,
             );
         }
     }

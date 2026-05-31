@@ -115,6 +115,43 @@ pub struct ProbeSnapshot {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RealRunSample {
+    pub time_s: f32,
+    pub room_air_temp_c: Option<f32>,
+    pub box_air_temp_c: f32,
+    pub product_temp_c: Option<f32>,
+    pub heater_on: bool,
+    pub reason: &'static str,
+}
+
+impl RealRunSample {
+    pub fn csv_header() -> &'static str {
+        "time_s,room_air_temp_c,box_air_temp_c,product_temp_c,heater_on,reason"
+    }
+
+    pub fn csv_row(&self) -> String {
+        let room_air_text = self
+            .room_air_temp_c
+            .map(|temp| format!("{temp:.3}"))
+            .unwrap_or_default();
+        let product_text = self
+            .product_temp_c
+            .map(|temp| format!("{temp:.3}"))
+            .unwrap_or_default();
+
+        format!(
+            "{:.0},{},{:.3},{},{},{}",
+            self.time_s,
+            room_air_text,
+            self.box_air_temp_c,
+            product_text,
+            if self.heater_on { 1 } else { 0 },
+            self.reason,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HeaterDecision {
     pub heater_on: bool,
     pub reason: &'static str,
@@ -191,6 +228,25 @@ impl RealRunController {
                 reason: "product_update",
             },
         }
+    }
+
+    pub fn update_sample(
+        &mut self,
+        time_s: f32,
+        latest: &LatestTemperatureReadings,
+        updated_probe: TemperatureProbe,
+    ) -> Option<RealRunSample> {
+        let snapshot = latest.snapshot_for_update_at(time_s, updated_probe)?;
+        let decision = self.update(snapshot);
+
+        Some(RealRunSample {
+            time_s,
+            room_air_temp_c: latest.room_air_temp_c,
+            box_air_temp_c: latest.box_air_temp_c?,
+            product_temp_c: latest.product_temp_c,
+            heater_on: decision.heater_on,
+            reason: decision.reason,
+        })
     }
 
     pub fn heater_on(&self) -> bool {
@@ -338,6 +394,79 @@ mod tests {
                 product_age_s: Some(3.0),
                 updated_probe: TemperatureProbe::Product,
             })
+        );
+    }
+
+    #[test]
+    fn real_run_sample_writes_csv_header() {
+        assert_eq!(
+            RealRunSample::csv_header(),
+            "time_s,room_air_temp_c,box_air_temp_c,product_temp_c,heater_on,reason"
+        );
+    }
+
+    #[test]
+    fn real_run_sample_writes_csv_row_with_all_temperatures() {
+        let sample = RealRunSample {
+            time_s: 2.0,
+            room_air_temp_c: Some(20.2),
+            box_air_temp_c: 22.4,
+            product_temp_c: Some(23.1),
+            heater_on: true,
+            reason: "below_target",
+        };
+
+        assert_eq!(sample.csv_row(), "2,20.200,22.400,23.100,1,below_target");
+    }
+
+    #[test]
+    fn real_run_sample_writes_csv_row_without_optional_temperatures() {
+        let sample = RealRunSample {
+            time_s: 2.0,
+            room_air_temp_c: None,
+            box_air_temp_c: 22.4,
+            product_temp_c: None,
+            heater_on: false,
+            reason: "holding_off",
+        };
+
+        assert_eq!(sample.csv_row(), "2,,22.400,,0,holding_off");
+    }
+
+    #[test]
+    fn real_run_controller_emits_sample_from_latest_readings() {
+        let mut latest = LatestTemperatureReadings::new();
+        latest.update_at(10.0, TemperatureProbe::BoxAir, 20.0);
+        latest.update_at(12.0, TemperatureProbe::Product, 21.0);
+
+        let mut controller = RealRunController::new(RealRunConfig::default());
+        let sample = controller
+            .update_sample(12.0, &latest, TemperatureProbe::Product)
+            .expect("real run sample");
+
+        assert_eq!(
+            sample,
+            RealRunSample {
+                time_s: 12.0,
+                room_air_temp_c: None,
+                box_air_temp_c: 20.0,
+                product_temp_c: Some(21.0),
+                heater_on: false,
+                reason: "product_update",
+            }
+        );
+    }
+
+    #[test]
+    fn real_run_controller_returns_no_sample_without_box_air() {
+        let mut latest = LatestTemperatureReadings::new();
+        latest.update_at(10.0, TemperatureProbe::Product, 21.0);
+
+        let mut controller = RealRunController::new(RealRunConfig::default());
+
+        assert_eq!(
+            controller.update_sample(10.0, &latest, TemperatureProbe::Product),
+            None
         );
     }
 
