@@ -81,17 +81,18 @@ cd firmware/esp32-temperature-bridge
 ESPFLASH_PORT=/dev/cu.usbmodem1234561 cargo run --release
 ```
 
-The firmware currently reads one DS18B20 probe on GPIO4 and labels it as box_air:
+The firmware currently reads two DS18B20 probes on separate pins:
 
 ```
 temp,box_air,22.437
+temp,room_air,20.125
 ```
 
 ## Real control smoke test
 
 `real-control-test` reads the ESP32 temperature bridge and drives the Tasmota plug from the real box-air temperature.
 
-For this first real control test, the single `box_air` probe is also used as the assumed tempeh/core temperature.
+For this control test, `box_air` drives the heater decision. `room_air` is logged as ambient context. The product/core column remains blank until the product probe is added.
 
 It writes the control log to stdout and to a CSV file:
 
@@ -135,12 +136,13 @@ Current ESP32 firmware output:
 
 ```
 temp,box_air,22.437
+temp,room_air,20.125
 ```
 
 Use stdin for parser testing:
 
 ```bash
-printf "temp,box_air,22.4\n" | cargo run -- thermometer-test -
+printf "temp,box_air,22.4\ntemp,room_air,20.2\n" | cargo run -- thermometer-test -
 ```
 
 Use a serial port for the ESP32 temperature bridge:
@@ -151,11 +153,11 @@ cargo run -- thermometer-test /dev/ttyACM0
 cargo run -- thermometer-test /dev/cu.usbmodem1234561
 ```
 
-Expected CSV output for the current single-probe firmware:
+Expected CSV output:
 
 ```text
-time_s,box_air_temp_c,tempeh_core_temp_c
-1,22.437,
+time_s,room_air_temp_c,box_air_temp_c,tempeh_core_temp_c
+1,20.125,22.437,
 ```
 
 ## Serial ports
@@ -168,7 +170,7 @@ cargo run -- ports
 
 The command prints USB metadata where available and marks ports that look like likely ESP32 devices.
 
-The command prints CSV snapshots with the latest known box-air temperature. The product/core column is blank until a second probe is added.
+The command prints CSV snapshots with the latest known box-air and room-air temperatures. The product/core column is blank until the product probe is added.
 It does not control the heater.
 
 ## Pet mode

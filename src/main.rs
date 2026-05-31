@@ -900,6 +900,7 @@ fn run_trace_control_test_steps(
 
 #[derive(Debug, Clone, Copy)]
 struct LatestTemperatureReadings {
+    room_air_temp_c: Option<f32>,
     box_air_temp_c: Option<f32>,
     tempeh_core_temp_c: Option<f32>,
 }
@@ -907,6 +908,7 @@ struct LatestTemperatureReadings {
 impl LatestTemperatureReadings {
     fn new() -> Self {
         Self {
+            room_air_temp_c: None,
             box_air_temp_c: None,
             tempeh_core_temp_c: None,
         }
@@ -914,6 +916,7 @@ impl LatestTemperatureReadings {
 
     fn update(&mut self, probe: TemperatureProbe, temp_c: f32) {
         match probe {
+            TemperatureProbe::RoomAir => self.room_air_temp_c = Some(temp_c),
             TemperatureProbe::BoxAir => self.box_air_temp_c = Some(temp_c),
             TemperatureProbe::Product => self.tempeh_core_temp_c = Some(temp_c),
         }
@@ -922,6 +925,7 @@ impl LatestTemperatureReadings {
     fn reading(&self, time_s: f32) -> Option<TemperatureReading> {
         Some(TemperatureReading {
             time_s,
+            room_air_temp_c: self.room_air_temp_c,
             box_air_temp_c: self.box_air_temp_c?,
             tempeh_core_temp_c: self.tempeh_core_temp_c,
         })
@@ -932,6 +936,7 @@ impl LatestTemperatureReadings {
 struct LiveSample {
     seq: u64,
     time_s: f32,
+    room_air_temp_c: Option<f32>,
     box_air_temp_c: f32,
     assumed_tempeh_core_temp_c: f32,
     heater_on: bool,
@@ -966,6 +971,7 @@ impl LiveRunState {
     fn push(
         &mut self,
         time_s: f32,
+        room_air_temp_c: Option<f32>,
         box_air_temp_c: f32,
         assumed_tempeh_core_temp_c: f32,
         heater_on: bool,
@@ -974,6 +980,7 @@ impl LiveRunState {
         let sample = LiveSample {
             seq: self.next_seq,
             time_s,
+            room_air_temp_c,
             box_air_temp_c,
             assumed_tempeh_core_temp_c,
             heater_on,
@@ -1026,6 +1033,7 @@ impl LiveAppState {
     fn push_sample(
         &self,
         time_s: f32,
+        room_air_temp_c: Option<f32>,
         box_air_temp_c: f32,
         assumed_tempeh_core_temp_c: f32,
         heater_on: bool,
@@ -1035,6 +1043,7 @@ impl LiveAppState {
             let mut run = self.run.lock().expect("live state mutex poisoned");
             run.push(
                 time_s,
+                room_air_temp_c,
                 box_air_temp_c,
                 assumed_tempeh_core_temp_c,
                 heater_on,
@@ -1156,7 +1165,7 @@ fn run_thermometer_test(source_arg: Option<String>) -> Result<(), Box<dyn std::e
         })?;
 
     eprintln!("Reading temperatures from {source} at {DEFAULT_SERIAL_BAUD} baud.");
-    eprintln!("Expected line from current firmware: temp,box_air,22.437");
+    eprintln!("Expected lines from current firmware: temp,box_air,22.437 and temp,room_air,20.125");
     eprintln!(
         "If you see ESP-IDF example logs instead, flash firmware/esp32-temperature-bridge first."
     );
@@ -1254,11 +1263,11 @@ fn run_real_control_test(
     eprintln!("Starting real control test.");
     eprintln!("Reading box_air from {source} at {DEFAULT_SERIAL_BAUD} baud.");
     eprintln!("Driving Tasmota plug at {}.", heater.base_url());
-    eprintln!("Using box_air as the control temperature.");
+    eprintln!("Using box_air for control; room_air is logged for context.");
     eprintln!("Saving data to {csv_path}.");
     eprintln!("Press Ctrl-C to stop.");
 
-    let header = "time_s,box_air_temp_c,assumed_tempeh_core_temp_c,heater_on,reason";
+    let header = "time_s,room_air_temp_c,box_air_temp_c,assumed_tempeh_core_temp_c,heater_on,reason";
     let mut csv_log = CsvLog::create(&csv_path, header)?;
 
     // Start from a known safe state.
@@ -1322,7 +1331,7 @@ fn run_real_control_live(
         })?;
     }
 
-    let header = "time_s,box_air_temp_c,assumed_tempeh_core_temp_c,heater_on,reason";
+    let header = "time_s,room_air_temp_c,box_air_temp_c,assumed_tempeh_core_temp_c,heater_on,reason";
     let mut csv_log = CsvLog::create(&csv_path, header)?;
     let live_state = Arc::new(LiveAppState::new(csv_path.clone()));
     let server_handle = spawn_live_server(Arc::clone(&live_state), addr);
@@ -1331,7 +1340,7 @@ fn run_real_control_live(
     eprintln!("Starting live real control test.");
     eprintln!("Reading box_air from {source} at {DEFAULT_SERIAL_BAUD} baud.");
     eprintln!("Driving Tasmota plug at {}.", heater.base_url());
-    eprintln!("Using box_air as assumed tempeh/core temperature until the second probe exists.");
+    eprintln!("Using box_air for control; room_air is logged for context.");
     eprintln!("Saving data to {csv_path}.");
     eprintln!("Live UI: http://{addr}");
     eprintln!("Press Ctrl-C to stop.");
@@ -1391,6 +1400,7 @@ where
     let start = Instant::now();
     let mut line = String::new();
     let mut printed_header = false;
+    let mut latest = LatestTemperatureReadings::new();
     let mut last_heater_on = false;
 
     while !stop_requested.load(Ordering::SeqCst) {
@@ -1419,13 +1429,23 @@ where
                 continue;
             }
         };
-        let TemperatureProbe::BoxAir = parsed.probe else {
+        latest.update(parsed.probe, parsed.temp_c);
+
+        let Some(box_air_temp_c) = latest.box_air_temp_c else {
             continue;
         };
-        let box_air_temp_c = parsed.temp_c;
+        let time_s = start.elapsed().as_secs_f32();
         let assumed_tempeh_core_temp_c = box_air_temp_c;
-        let heater_on = controller.update(box_air_temp_c);
-        let reason = control_reason(box_air_temp_c, heater_on, last_heater_on);
+
+        let mut heater_on = last_heater_on;
+        let reason = match parsed.probe {
+            TemperatureProbe::BoxAir => {
+                heater_on = controller.update(box_air_temp_c);
+                control_reason(box_air_temp_c, heater_on, last_heater_on)
+            }
+            TemperatureProbe::RoomAir => "room_update",
+            TemperatureProbe::Product => "product_update",
+        };
 
         if heater_on != last_heater_on {
             heater
@@ -1439,9 +1459,12 @@ where
             printed_header = true;
         }
 
-        let time_s = start.elapsed().as_secs_f32();
+        let room_air_temp_c = latest.room_air_temp_c;
+        let room_air_text = room_air_temp_c
+            .map(|temp| format!("{temp:.3}"))
+            .unwrap_or_default();
         let row = format!(
-            "{time_s:.0},{box_air_temp_c:.3},{assumed_tempeh_core_temp_c:.3},{heater_on_int},{reason}",
+            "{time_s:.0},{room_air_text},{box_air_temp_c:.3},{assumed_tempeh_core_temp_c:.3},{heater_on_int},{reason}",
             heater_on_int = if heater_on { 1 } else { 0 },
         );
         println!("{row}");
@@ -1450,6 +1473,7 @@ where
         if let Some(live_state) = live_state.as_ref() {
             live_state.push_sample(
                 time_s,
+                room_air_temp_c,
                 box_air_temp_c,
                 assumed_tempeh_core_temp_c,
                 heater_on,
@@ -1613,6 +1637,10 @@ code {
       <div class="value" id="latest-temp">—</div>
     </div>
     <div class="card">
+      <div class="label">Room air</div>
+      <div class="value" id="room-temp">—</div>
+    </div>
+    <div class="card">
       <div class="label">Heater</div>
       <div class="value" id="heater">—</div>
     </div>
@@ -1649,6 +1677,7 @@ let lastSeq = 0;
 let source = null;
 
 const ids = {
+  roomTemp: document.getElementById("room-temp"),
   latestTemp: document.getElementById("latest-temp"),
   heater: document.getElementById("heater"),
   elapsed: document.getElementById("elapsed"),
@@ -1737,6 +1766,9 @@ function render() {
   }
 
   ids.latestTemp.textContent = `${latest.box_air_temp_c.toFixed(2)} °C`;
+  ids.roomTemp.textContent =
+    latest.room_air_temp_c === null || latest.room_air_temp_c === undefined
+      ? "—" : `${latest.room_air_temp_c.toFixed(2)} °C`;
   ids.heater.textContent = latest.heater_on ? "on" : "off";
   ids.elapsed.textContent = fmtElapsed(latest.time_s);
 

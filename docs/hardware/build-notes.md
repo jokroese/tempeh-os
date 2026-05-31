@@ -1,6 +1,6 @@
 # Hardware v0 Build Notes
 
-## Probe wiring: current smoke test
+## Probe wiring: box + room test
 
 We are using the MICREEN DS18B20 waterproof temperature sensor kit.
 
@@ -21,20 +21,27 @@ black   -> GND / BLK
 yellow  -> DATA
 ```
 
-Connect one adapter to the ESP32:
+Connect the box-air adapter to the ESP32:
 
 ```text
-adapter VCC        -> ESP32 3V3
-adapter GND / BLK  -> ESP32 GND
-adapter DATA       -> ESP32 GPIO4
+box adapter VCC        -> ESP32 3V3
+box adapter GND / BLK  -> ESP32 GND
+box adapter DATA       -> ESP32 GPIO4
 ```
 
-This probe is box_air.
+Connect the room-air adapter to the ESP32:
+
+```text
+room adapter VCC        -> ESP32 3V3
+room adapter GND / BLK  -> ESP32 GND
+room adapter DATA       -> ESP32 GPIO5
+```
 
 Expected serial output from the ESP32:
 
 ```text
 temp,box_air,22.437
+temp,room_air,20.125
 ```
 
 Flash the ESP32 firmware:
@@ -44,7 +51,10 @@ cd firmware/esp32-temperature-bridge
 ESPFLASH_PORT=/dev/cu.usbmodem1234561 cargo run --release
 ```
 
-Two-probe wiring will come later. For now, only connect the box_air probe.
+Product-probe wiring will come later. For now, use:
+
+- `box_air` on GPIO4 for control
+- `room_air` on GPIO5 for ambient context
 
 ## Physical stack
 
@@ -53,16 +63,18 @@ Two-probe wiring will come later. For now, only connect the box_air probe.
 3. Put the rack above the heat spreader.
 4. Place perforated ISTAD bags on the rack.
 5. Place the box_air probe in air at rack height, not touching metal/plastic.
-6. Leave the lid slightly open, using the probe cable as part of the small air gap.
+6. Place the room_air probe outside the box, away from the heat mat and direct drafts.
+7. Leave the lid slightly open, using the probe cable as part of the small air gap.
 
 ## Probe naming
 
 - `box_air`: air temperature at rack/food height.
+- `room_air`: ambient room temperature outside the incubator.
 - `product`: not wired yet.
 
 ## First test protocol
 
-1. Run the box_air probe at room temperature for 10 minutes.
+1. Run the box_air and room_air probes side by side at room temperature for 10 minutes.
 2. Run empty-box heat test to 30 °C.
 3. Run dummy-load test with wet beans/water mass.
 4. Only then run food fermentation.

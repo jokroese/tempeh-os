@@ -2,18 +2,20 @@
 
 Firmware for the ESP32-S3-DevKitC-1.
 
-Reads one DS18B20 waterproof probe on GPIO4 and prints labelled temperature readings over USB serial. This is the current single-probe smoke test firmware.
+Reads DS18B20 waterproof probes on separate GPIO pins and prints labelled temperature readings over USB serial.
 
 ## Protocol
 
 ```text
 temp,box_air,22.437
+temp,room_air,20.125
 ```
 
 ## Pins
 
 ```text
 GPIO4 -> box_air DATA
+GPIO5 -> room_air DATA
 3V3   -> probe adapter VCC
 G     -> probe adapter GND / BLK
 ```
@@ -57,8 +59,8 @@ cargo run -- real-control-test /dev/cu.usbmodem1234561 http://192.168.8.193 out/
 Expected host output:
 
 ```text
-time_s,box_air_temp_c,tempeh_core_temp_c
-1,22.437,
+time_s,room_air_temp_c,box_air_temp_c,tempeh_core_temp_c
+1,20.125,22.437,
 ```
 
-The empty `tempeh_core_temp_c` column is expected until a second probe is added.
+The empty `tempeh_core_temp_c` column is expected until the product probe is added.

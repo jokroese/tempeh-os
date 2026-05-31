@@ -10,6 +10,7 @@ use esp_idf_sys::{
 use log::{info, warn};
 
 const BOX_AIR_GPIO: i32 = 4;
+const ROOM_AIR_GPIO: i32 = 5;
 
 const DS18B20_SKIP_ROM: u8 = 0xCC;
 const DS18B20_CONVERT_T: u8 = 0x44;
@@ -21,24 +22,32 @@ fn main() -> Result<()> {
 
     let peripherals = Peripherals::take()?;
     let _box_air_pin = peripherals.pins.gpio4;
+    let _room_air_pin = peripherals.pins.gpio5;
 
     let mut box_air = Ds18b20::new(BOX_AIR_GPIO)?;
+    let mut room_air = Ds18b20::new(ROOM_AIR_GPIO)?;
 
     info!("Tempeh OS ESP32 temperature bridge");
     info!("box_air DATA -> GPIO{BOX_AIR_GPIO}");
-    info!("reading one DS18B20 probe");
+    info!("room_air DATA -> GPIO{ROOM_AIR_GPIO}");
+    info!("reading two DS18B20 probes on separate 1-Wire buses");
 
     loop {
-        match box_air.read_temperature_c() {
-            Ok(temp_c) => {
-                println!("temp,box_air,{temp_c:.3}");
-            }
-            Err(error) => {
-                warn!("box_air read failed: {error:#}");
-            }
-        }
+        read_and_print("box_air", &mut box_air);
+        read_and_print("room_air", &mut room_air);
 
         FreeRtos::delay_ms(2_000);
+    }
+}
+
+fn read_and_print(label: &str, probe: &mut Ds18b20) {
+    match probe.read_temperature_c() {
+        Ok(temp_c) => {
+            println!("temp,{label},{temp_c:.3}");
+        }
+        Err(error) => {
+            warn!("{label} read failed: {error:#}");
+        }
     }
 }
 

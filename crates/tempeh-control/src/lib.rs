@@ -329,6 +329,7 @@ pub fn parse_temperature_line(
         return Err(ThermometerError::InvalidReading);
     }
     let probe = match probe_name {
+        "room_air" => TemperatureProbe::RoomAir,
         "box_air" => TemperatureProbe::BoxAir,
         "product" | "tempeh_core" => TemperatureProbe::Product,
         _ => return Ok(None),
@@ -480,6 +481,20 @@ mod tests {
             ParsedTemperatureLine {
                 probe: TemperatureProbe::BoxAir,
                 temp_c: 22.437,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_room_air_temperature_line() {
+        let parsed = parse_temperature_line("temp,room_air,20.125")
+            .unwrap()
+            .expect("temperature line");
+        assert_eq!(
+            parsed,
+            ParsedTemperatureLine {
+                probe: TemperatureProbe::RoomAir,
+                temp_c: 20.125,
             }
         );
     }
