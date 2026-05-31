@@ -45,6 +45,7 @@ anyhow = "1"
 esp-idf-hal = "0.45"
 esp-idf-svc = "0.51"
 esp-idf-sys = { version = "0.36", features = ["binstart"] }
+embedded-svc = "0.28"
 log = "0.4"
 embuild = "0.33"
 

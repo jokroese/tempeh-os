@@ -72,6 +72,9 @@ Then edit:
 [wifi]
 ssid = "your-wifi-name"
 password = "your-wifi-password"
+
+[tasmota]
+base_url = "http://192.0.2.10"
 ```
 
 `firmware.local.toml` is ignored by Git. Do not commit real Wi-Fi credentials.
@@ -82,12 +85,14 @@ Then flash from this directory:
 ESPFLASH_PORT=/dev/cu.usbmodem1234561 cargo run --release
 ```
 
-The firmware currently uses Wi-Fi only as preparation for ESP32-side Tasmota control. It does not send heater commands yet.
+The firmware sends a boot-time Power Off command to the configured Tasmota plug. It does not yet apply runtime heater decisions to the plug.
 
 Expected boot log includes:
 
 ```text
 Wi-Fi connected: ip=...
+sending Tasmota heater off command: reason=boot_safe_off
+Tasmota heater command accepted: heater_on=false
 ```
 
 After flashing, run the host-side smoke test from the repository root:
@@ -99,7 +104,7 @@ cargo run -p tempeh-host -- thermometer-test /dev/cu.usbmodem1234561
 For a supervised heat-mat control run from the repository root:
 
 ```bash
-cargo run -p tempeh-host -- real-control-test /dev/cu.usbmodem1234561 http://192.168.8.193 out/heat-mat-empty-box-01.csv
+cargo run -p tempeh-host -- real-control-test /dev/cu.usbmodem1234561 http://192.0.2.10 out/heat-mat-empty-box-01.csv
 ```
 
 Expected host output:

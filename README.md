@@ -45,7 +45,7 @@ cargo run -p tempeh-host -- control
 `plug-test` checks that the plug responds: on, wait two seconds, off.
 
 ```bash
-cargo run -p tempeh-host -- plug-test http://192.168.8.193
+cargo run -p tempeh-host -- plug-test http://192.0.2.10
 ```
 
 `trace-control-test` checks the full controller path using fake temperature readings:
@@ -55,7 +55,7 @@ TemperatureTrace -> TraceThermometer -> Controller -> TasmotaHeater
 ```
 
 ```bash
-cargo run -p tempeh-host -- trace-control-test http://192.168.8.193
+cargo run -p tempeh-host -- trace-control-test http://192.0.2.10
 ```
 
 ## ESP32 temperature bridge firmware
@@ -95,6 +95,9 @@ Edit `firmware.local.toml`:
 [wifi]
 ssid = "your-wifi-name"
 password = "your-wifi-password"
+
+[tasmota]
+base_url = "http://192.0.2.10"
 ```
 
 Then:
@@ -102,6 +105,8 @@ Then:
 ```bash
 ESPFLASH_PORT=/dev/cu.usbmodem1234561 cargo run --release
 ```
+
+On boot, the ESP32 sends a Tasmota Power Off command before continuing normal probe reads and dry-run policy output.
 
 The firmware currently reads three DS18B20 probes on separate pins:
 
@@ -131,7 +136,7 @@ For this control test, `box_air` drives the normal heater decision. `room_air` i
 It writes the control log to stdout and to a CSV file:
 
 ```bash
-cargo run -p tempeh-host -- real-control-test /dev/cu.usbmodem1234561 http://192.168.8.193
+cargo run -p tempeh-host -- real-control-test /dev/cu.usbmodem1234561 http://192.0.2.10
 ```
 
 Default output (timestamped so runs do not overwrite each other):
@@ -143,7 +148,7 @@ out/real-control-test-20260529-205812.csv
 Use a named file for a supervised heat-mat run:
 
 ```bash
-cargo run -p tempeh-host -- real-control-test /dev/cu.usbmodem1234561 http://192.168.8.193 out/heat-mat-empty-box-01.csv
+cargo run -p tempeh-host -- real-control-test /dev/cu.usbmodem1234561 http://192.0.2.10 out/heat-mat-empty-box-01.csv
 ```
 
 ## Live real control UI
@@ -151,7 +156,7 @@ cargo run -p tempeh-host -- real-control-test /dev/cu.usbmodem1234561 http://192
 `real-control-live` runs the same supervised host control loop as `real-control-test`, writes the same CSV log, and serves a local live chart:
 
 ```bash
-cargo run -p tempeh-host -- real-control-live /dev/cu.usbmodem1234561 http://192.168.8.193
+cargo run -p tempeh-host -- real-control-live /dev/cu.usbmodem1234561 http://192.0.2.10
 ```
 
 Open:

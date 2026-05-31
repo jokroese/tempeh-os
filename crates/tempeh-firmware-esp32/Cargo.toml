@@ -12,6 +12,7 @@ anyhow.workspace = true
 esp-idf-hal.workspace = true
 esp-idf-svc.workspace = true
 esp-idf-sys.workspace = true
+embedded-svc.workspace = true
 log.workspace = true
 
 [build-dependencies]

@@ -8,26 +8,47 @@ fn main() {
     println!("cargo:rerun-if-changed=firmware.local.example.toml");
 
     if let Some(config) = LocalFirmwareConfig::read("firmware.local.toml") {
-        println!("cargo:rustc-env=TEMPEH_WIFI_SSID={}", config.wifi_ssid);
+        println!("cargo:rustc-env=TEMPEH_WIFI_SSID={}", config.wifi.ssid);
         println!(
             "cargo:rustc-env=TEMPEH_WIFI_PASSWORD={}",
-            config.wifi_password
+            config.wifi.password
         );
+
+        if let Some(tasmota) = config.tasmota {
+            println!(
+                "cargo:rustc-env=TEMPEH_TASMOTA_BASE_URL={}",
+                tasmota.base_url
+            );
+        }
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 struct LocalFirmwareConfig {
-    wifi_ssid: String,
-    wifi_password: String,
+    wifi: WifiConfig,
+    tasmota: Option<TasmotaConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct WifiConfig {
+    ssid: String,
+    password: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct TasmotaConfig {
+    base_url: String,
 }
 
 impl LocalFirmwareConfig {
     fn read(path: impl AsRef<Path>) -> Option<Self> {
         let text = fs::read_to_string(path).ok()?;
         Some(Self {
-            wifi_ssid: read_toml_string(&text, "ssid")?,
-            wifi_password: read_toml_string(&text, "password")?,
+            wifi: WifiConfig {
+                ssid: read_toml_string(&text, "ssid")?,
+                password: read_toml_string(&text, "password")?,
+            },
+            tasmota: read_toml_string(&text, "base_url").map(|base_url| TasmotaConfig { base_url }),
         })
     }
 }
@@ -60,5 +81,22 @@ mod tests {
 
         assert_eq!(read_toml_string(text, "ssid"), Some("tempeh-net".into()));
         assert_eq!(read_toml_string(text, "password"), Some("secret".into()));
+    }
+
+    #[test]
+    fn reads_local_firmware_config_with_tasmota() {
+        let text = r#"
+            [wifi]
+            ssid = "tempeh-net"
+            password = "secret"
+
+            [tasmota]
+            base_url = "http://192.0.2.10"
+        "#;
+
+        assert_eq!(
+            read_toml_string(text, "base_url"),
+            Some("http://192.0.2.10".into())
+        );
     }
 }

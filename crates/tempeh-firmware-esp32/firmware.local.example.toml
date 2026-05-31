@@ -1,3 +1,6 @@
 [wifi]
 ssid = "your-wifi-name"
 password = "your-wifi-password"
+
+[tasmota]
+base_url = "http://192.0.2.10"

@@ -1,8 +1,10 @@
 use anyhow::{Context, Result, bail};
+use embedded_svc::http::client::Client;
 use esp_idf_hal::delay::{Ets, FreeRtos};
 use esp_idf_hal::modem::Modem;
 use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
+use esp_idf_svc::http::client::{Configuration as HttpConfiguration, EspHttpConnection};
 use esp_idf_svc::log::EspLogger;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::wifi::{BlockingWifi, ClientConfiguration, Configuration, EspWifi};
@@ -25,6 +27,7 @@ const DS18B20_CONVERT_T: u8 = 0x44;
 const DS18B20_READ_SCRATCHPAD: u8 = 0xBE;
 const WIFI_SSID: Option<&str> = option_env!("TEMPEH_WIFI_SSID");
 const WIFI_PASSWORD: Option<&str> = option_env!("TEMPEH_WIFI_PASSWORD");
+const TASMOTA_BASE_URL: Option<&str> = option_env!("TEMPEH_TASMOTA_BASE_URL");
 
 fn main() -> Result<()> {
     esp_idf_svc::sys::link_patches();
@@ -37,6 +40,10 @@ fn main() -> Result<()> {
     let modem = peripherals.modem;
 
     let _wifi = connect_wifi(modem)?;
+    let mut tasmota_heater = TasmotaHeaterOutput::from_build_config()?;
+
+    // Start from a known safe state. Runtime decision actuation is wired in a later patch.
+    tasmota_heater.set_heater(false, "boot_safe_off")?;
 
     let mut box_air = Ds18b20::new(BOX_AIR_GPIO)?;
     let mut room_air = Ds18b20::new(ROOM_AIR_GPIO)?;
@@ -53,7 +60,7 @@ fn main() -> Result<()> {
     info!("product DATA -> GPIO{PRODUCT_GPIO}");
     info!("reading three DS18B20 probes on separate 1-Wire buses");
     info!("running shared real-run policy on device");
-    info!("heater output: dry-run only; no physical heater is actuated");
+    info!("heater output: Tasmota HTTP; boot safety off command has been sent");
     info!("wifi connected; tasmota actuator is not enabled yet");
     info!(
         "control output: control,time_s,room_air_temp_c,box_air_temp_c,product_temp_c,heater_on,reason"
@@ -137,6 +144,77 @@ fn connect_wifi(modem: Modem) -> Result<BlockingWifi<EspWifi<'static>>> {
     );
 
     Ok(wifi)
+}
+
+#[derive(Debug, Clone)]
+struct TasmotaHeaterOutput {
+    base_url: String,
+    heater_on: bool,
+}
+
+impl TasmotaHeaterOutput {
+    fn from_build_config() -> Result<Self> {
+        let base_url = TASMOTA_BASE_URL.unwrap_or_default();
+
+        if base_url.is_empty() {
+            bail!(
+                "TEMPEH_TASMOTA_BASE_URL is not set. Add [tasmota].base_url to firmware.local.toml"
+            );
+        }
+
+        Ok(Self::new(base_url))
+    }
+
+    fn new(base_url: impl Into<String>) -> Self {
+        Self {
+            base_url: normalise_base_url(base_url.into()),
+            heater_on: false,
+        }
+    }
+
+    fn set_heater(&mut self, on: bool, reason: &'static str) -> Result<()> {
+        let url = self.command_url(on);
+        let command_label = if on { "on" } else { "off" };
+
+        info!("sending Tasmota heater {command_label} command: reason={reason}");
+
+        let connection = EspHttpConnection::new(&HttpConfiguration::default())
+            .context("failed to create ESP HTTP connection")?;
+        let mut client = Client::wrap(connection);
+        let request = client
+            .get(&url)
+            .with_context(|| format!("failed to create Tasmota request: {url}"))?;
+        let response = request
+            .submit()
+            .with_context(|| format!("failed to send Tasmota request: {url}"))?;
+
+        let status = response.status();
+        if !(200..300).contains(&status) {
+            bail!("Tasmota heater command failed with HTTP status {status}");
+        }
+
+        self.heater_on = on;
+        info!(
+            "Tasmota heater command accepted: heater_on={}",
+            self.heater_on
+        );
+        Ok(())
+    }
+
+    fn command_url(&self, on: bool) -> String {
+        let command = if on { "Power%20On" } else { "Power%20Off" };
+        format!("{}/cm?cmnd={command}", self.base_url)
+    }
+}
+
+fn normalise_base_url(mut base_url: String) -> String {
+    base_url = base_url.trim().trim_end_matches('/').to_string();
+
+    if base_url.starts_with("http://") || base_url.starts_with("https://") {
+        base_url
+    } else {
+        format!("http://{base_url}")
+    }
 }
 
 fn read_update_and_print(
