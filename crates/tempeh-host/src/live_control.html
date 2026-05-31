@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tempeh OS live control</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f8f5ee;
+  --fg: #211d17;
+  --muted: #6b6258;
+  --card: #fffaf1;
+  --line: #d8ccba;
+  --hot: #c6632b;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #151311;
+    --fg: #eee7dc;
+    --muted: #aaa096;
+    --card: #201d19;
+    --line: #3a332b;
+    --hot: #f6a15f;
+  }
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+}
+main {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 28px 18px 48px;
+}
+h1 {
+  margin: 0 0 6px;
+  font-size: 2rem;
+}
+.sub {
+  margin: 0 0 22px;
+  color: var(--muted);
+}
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 14px;
+}
+.label {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.value {
+  margin-top: 6px;
+  font-size: 1.45rem;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+.chart {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 12px;
+  overflow-x: auto;
+}
+svg {
+  width: 100%;
+  min-width: 720px;
+  height: auto;
+}
+.muted {
+  color: var(--muted);
+}
+code {
+  background: color-mix(in srgb, var(--card) 70%, var(--line));
+  padding: 2px 5px;
+  border-radius: 6px;
+}
+</style>
+</head>
+<body>
+<main>
+  <h1>Tempeh OS live control</h1>
+  <p class="sub">Live box-air temperature and heater state from the supervised host control loop.</p>
+
+  <section class="cards">
+    <div class="card">
+      <div class="label">Box air</div>
+      <div class="value" id="latest-temp">—</div>
+    </div>
+    <div class="card">
+      <div class="label">Product</div>
+      <div class="value" id="product-temp">—</div>
+    </div>
+    <div class="card">
+      <div class="label">Room air</div>
+      <div class="value" id="room-temp">—</div>
+    </div>
+    <div class="card">
+      <div class="label">Heater</div>
+      <div class="value" id="heater">—</div>
+    </div>
+    <div class="card">
+      <div class="label">Elapsed</div>
+      <div class="value" id="elapsed">—</div>
+    </div>
+    <div class="card">
+      <div class="label">Samples</div>
+      <div class="value" id="sample-count">0</div>
+    </div>
+    <div class="card">
+      <div class="label">Stream</div>
+      <div class="value" id="stream-state">connecting</div>
+    </div>
+  </section>
+
+  <section class="chart">
+    <svg id="chart" viewBox="0 0 900 420" role="img" aria-label="Box temperature and heater state over time">
+      <text x="64" y="28" font-size="20" font-weight="700" fill="currentColor">Box temperature + heater</text>
+      <text x="18" y="210" font-size="13" fill="currentColor" transform="rotate(-90 18 210)">Temperature °C</text>
+      <g id="plot"></g>
+    </svg>
+  </section>
+
+  <p class="muted">
+    CSV: <code id="csv-path">loading…</code>
+  </p>
+</main>
+
+<script>
+const samples = [];
+let lastSeq = 0;
+let source = null;
+
+const ids = {
+  roomTemp: document.getElementById("room-temp"),
+  latestTemp: document.getElementById("latest-temp"),
+  productTemp: document.getElementById("product-temp"),
+  heater: document.getElementById("heater"),
+  elapsed: document.getElementById("elapsed"),
+  sampleCount: document.getElementById("sample-count"),
+  streamState: document.getElementById("stream-state"),
+  csvPath: document.getElementById("csv-path"),
+  plot: document.getElementById("plot"),
+};
+
+function fmtElapsed(seconds) {
+  const total = Math.max(0, Math.round(seconds));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h > 0) return `${h}h ${String(m).padStart(2, "0")}m`;
+  return `${m}m ${String(s).padStart(2, "0")}s`;
+}
+
+function appendSample(sample) {
+  if (sample.seq <= lastSeq) return;
+  samples.push(sample);
+  lastSeq = Math.max(lastSeq, sample.seq);
+}
+
+async function updateStatus() {
+  const statusResponse = await fetch("/api/status", { cache: "no-store" });
+  if (!statusResponse.ok) return;
+
+  const status = await statusResponse.json();
+  ids.csvPath.textContent = status.csv_path;
+
+  if (status.first_retained_seq !== null && lastSeq > 0 && lastSeq < status.first_retained_seq - 1) {
+    console.warn("Browser fell behind retained live history; CSV remains the durable full log.");
+  }
+}
+
+async function catchUp(after = lastSeq) {
+  const response = await fetch(`/api/samples?after=${after}`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`sample request failed: ${response.status}`);
+
+  const incoming = await response.json();
+  for (const sample of incoming) {
+    appendSample(sample);
+  }
+
+  await updateStatus();
+  render();
+}
+
+function connectEvents() {
+  if (source !== null) {
+    source.close();
+  }
+
+  source = new EventSource("/events");
+
+  source.onopen = () => {
+    ids.streamState.textContent = "live";
+    catchUp(lastSeq).catch(error => console.error(error));
+  };
+
+  source.addEventListener("sample", event => {
+    appendSample(JSON.parse(event.data));
+    render();
+  });
+
+  source.addEventListener("resync", () => {
+    ids.streamState.textContent = "resync";
+    catchUp(lastSeq).catch(error => console.error(error));
+  });
+
+  source.onerror = () => {
+    ids.streamState.textContent = "reconnecting";
+    // EventSource reconnects automatically. On open, catchUp(lastSeq) fills
+    // anything that arrived while the browser was disconnected.
+  };
+}
+
+function render() {
+  ids.sampleCount.textContent = String(samples.length);
+
+  const latest = samples[samples.length - 1];
+  if (!latest) {
+    ids.plot.innerHTML = `<text x="64" y="210" fill="currentColor" opacity="0.6">Waiting for temperature readings…</text>`;
+    return;
+  }
+
+  ids.latestTemp.textContent = `${latest.box_air_temp_c.toFixed(2)} °C`;
+  ids.productTemp.textContent =
+    latest.product_temp_c === null || latest.product_temp_c === undefined
+      ? "—" : `${latest.product_temp_c.toFixed(2)} °C`;
+  ids.roomTemp.textContent =
+    latest.room_air_temp_c === null || latest.room_air_temp_c === undefined
+      ? "—" : `${latest.room_air_temp_c.toFixed(2)} °C`;
+  ids.heater.textContent = latest.heater_on ? "on" : "off";
+  ids.elapsed.textContent = fmtElapsed(latest.time_s);
+
+  const width = 900;
+  const height = 420;
+  const margin = { left: 64, right: 24, top: 48, bottom: 54 };
+  const plotW = width - margin.left - margin.right;
+  const plotH = height - margin.top - margin.bottom;
+
+  const visible = samples.slice(-900);
+  const tMin = visible[0].time_s;
+  const tMax = Math.max(tMin + 1, visible[visible.length - 1].time_s);
+
+  const tempValues = visible.flatMap(sample => {
+    const values = [sample.box_air_temp_c];
+    if (sample.product_temp_c !== null && sample.product_temp_c !== undefined) {
+      values.push(sample.product_temp_c);
+    }
+    return values;
+  });
+  let yMin = Math.min(...tempValues);
+  let yMax = Math.max(...tempValues);
+  if (Math.abs(yMax - yMin) < 0.5) {
+    yMin -= 0.5;
+    yMax += 0.5;
+  }
+  const pad = Math.max(0.25, (yMax - yMin) * 0.12);
+  yMin -= pad;
+  yMax += pad;
+
+  const x = t => margin.left + ((t - tMin) / (tMax - tMin)) * plotW;
+  const y = v => margin.top + (1 - ((v - yMin) / (yMax - yMin))) * plotH;
+
+  let grid = "";
+  for (let i = 0; i <= 4; i++) {
+    const p = i / 4;
+    const gx = margin.left + p * plotW;
+    const seconds = tMin + p * (tMax - tMin);
+    grid += `<line x1="${gx.toFixed(1)}" y1="${margin.top}" x2="${gx.toFixed(1)}" y2="${margin.top + plotH}" stroke="currentColor" opacity="0.08"/>`;
+    grid += `<text x="${gx.toFixed(1)}" y="${height - 24}" text-anchor="middle" font-size="12" fill="currentColor">${fmtElapsed(seconds)}</text>`;
+  }
+  for (let i = 0; i <= 4; i++) {
+    const p = i / 4;
+    const gy = margin.top + p * plotH;
+    const value = yMax - p * (yMax - yMin);
+    grid += `<line x1="${margin.left}" y1="${gy.toFixed(1)}" x2="${width - margin.right}" y2="${gy.toFixed(1)}" stroke="currentColor" opacity="0.08"/>`;
+    grid += `<text x="${margin.left - 8}" y="${(gy + 4).toFixed(1)}" text-anchor="end" font-size="12" fill="currentColor">${value.toFixed(1)}</text>`;
+  }
+
+  let heaterBands = "";
+  let bandStart = null;
+  for (const sample of visible) {
+    if (sample.heater_on && bandStart === null) bandStart = sample.time_s;
+    if (!sample.heater_on && bandStart !== null) {
+      const x0 = x(bandStart);
+      const x1 = x(sample.time_s);
+      heaterBands += `<rect x="${x0.toFixed(1)}" y="${margin.top}" width="${Math.max(1, x1 - x0).toFixed(1)}" height="${plotH}" fill="var(--hot)" opacity="0.16"/>`;
+      bandStart = null;
+    }
+  }
+  if (bandStart !== null) {
+    const x0 = x(bandStart);
+    const x1 = x(tMax);
+    heaterBands += `<rect x="${x0.toFixed(1)}" y="${margin.top}" width="${Math.max(1, x1 - x0).toFixed(1)}" height="${plotH}" fill="var(--hot)" opacity="0.16"/>`;
+  }
+
+  function linePath(points, valueFn) {
+    const validPoints = points.filter(sample => {
+      const value = valueFn(sample);
+      return value !== null && value !== undefined;
+    });
+    return validPoints.map((sample, index) => {
+      const command = index === 0 ? "M" : "L";
+      return `${command} ${x(sample.time_s).toFixed(2)} ${y(valueFn(sample)).toFixed(2)}`;
+    }).join(" ");
+  }
+
+  const boxPath = linePath(visible, sample => sample.box_air_temp_c);
+  const productPath = linePath(visible, sample => sample.product_temp_c);
+
+  const latestX = x(latest.time_s);
+  const latestY = y(latest.box_air_temp_c);
+  const latestProductX = latest.product_temp_c === null || latest.product_temp_c === undefined
+    ? null : x(latest.time_s);
+  const latestProductY = latest.product_temp_c === null || latest.product_temp_c === undefined
+    ? null : y(latest.product_temp_c);
+  const latestProductMarker = latestProductX === null || latestProductY === null
+    ? ""
+    : `<circle cx="${latestProductX.toFixed(1)}" cy="${latestProductY.toFixed(1)}" r="4.5" fill="var(--hot)"/>`;
+
+  ids.plot.innerHTML = `
+    ${grid}
+    ${heaterBands}
+    <line x1="${margin.left}" y1="${margin.top + plotH}" x2="${width - margin.right}" y2="${margin.top + plotH}" stroke="currentColor" opacity="0.35"/>
+    <path d="${boxPath}" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round"/>
+    <path d="${productPath}" fill="none" stroke="var(--hot)" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="${latestX.toFixed(1)}" cy="${latestY.toFixed(1)}" r="4.5" fill="currentColor"/>
+    ${latestProductMarker}
+    <rect x="${margin.left}" y="${height - 48}" width="14" height="14" rx="4" fill="var(--hot)" opacity="0.35"/>
+    <text x="${margin.left + 22}" y="${height - 36}" font-size="13" fill="currentColor">heater on</text>
+    <line x1="${margin.left + 118}" y1="${height - 41}" x2="${margin.left + 148}" y2="${height - 41}" stroke="currentColor" stroke-width="2.6"/>
+    <text x="${margin.left + 154}" y="${height - 36}" font-size="13" fill="currentColor">box air</text>
+    <line x1="${margin.left + 230}" y1="${height - 41}" x2="${margin.left + 260}" y2="${height - 41}" stroke="var(--hot)" stroke-width="2.4"/>
+    <text x="${margin.left + 266}" y="${height - 36}" font-size="13" fill="currentColor">product</text>
+  `;
+}
+
+catchUp(0).catch(error => console.error(error));
+connectEvents();
+setInterval(() => {
+  updateStatus().catch(error => console.error(error));
+}, 5000);
+</script>
+</body>
+</html>
