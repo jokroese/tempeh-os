@@ -6,6 +6,8 @@ pub struct RealRunConfig {
     pub controller: ControllerConfig,
     pub box_air_hard_cutoff_c: f32,
     pub product_hard_cutoff_c: f32,
+    pub max_box_air_age_s: f32,
+    pub max_product_age_s: f32,
 }
 
 impl Default for RealRunConfig {
@@ -14,6 +16,8 @@ impl Default for RealRunConfig {
             controller: ControllerConfig::default(),
             box_air_hard_cutoff_c: 34.0,
             product_hard_cutoff_c: 34.0,
+            max_box_air_age_s: 20.0,
+            max_product_age_s: 60.0,
         }
     }
 }
@@ -23,6 +27,9 @@ pub struct LatestTemperatureReadings {
     pub room_air_temp_c: Option<f32>,
     pub box_air_temp_c: Option<f32>,
     pub product_temp_c: Option<f32>,
+    pub room_air_updated_at_s: Option<f32>,
+    pub box_air_updated_at_s: Option<f32>,
+    pub product_updated_at_s: Option<f32>,
 }
 
 impl LatestTemperatureReadings {
@@ -31,14 +38,30 @@ impl LatestTemperatureReadings {
             room_air_temp_c: None,
             box_air_temp_c: None,
             product_temp_c: None,
+            room_air_updated_at_s: None,
+            box_air_updated_at_s: None,
+            product_updated_at_s: None,
         }
     }
 
     pub fn update(&mut self, probe: TemperatureProbe, temp_c: f32) {
+        self.update_at(0.0, probe, temp_c);
+    }
+
+    pub fn update_at(&mut self, time_s: f32, probe: TemperatureProbe, temp_c: f32) {
         match probe {
-            TemperatureProbe::RoomAir => self.room_air_temp_c = Some(temp_c),
-            TemperatureProbe::BoxAir => self.box_air_temp_c = Some(temp_c),
-            TemperatureProbe::Product => self.product_temp_c = Some(temp_c),
+            TemperatureProbe::RoomAir => {
+                self.room_air_temp_c = Some(temp_c);
+                self.room_air_updated_at_s = Some(time_s);
+            }
+            TemperatureProbe::BoxAir => {
+                self.box_air_temp_c = Some(temp_c);
+                self.box_air_updated_at_s = Some(time_s);
+            }
+            TemperatureProbe::Product => {
+                self.product_temp_c = Some(temp_c);
+                self.product_updated_at_s = Some(time_s);
+            }
         }
     }
 
@@ -52,10 +75,24 @@ impl LatestTemperatureReadings {
     }
 
     pub fn snapshot_for_update(&self, updated_probe: TemperatureProbe) -> Option<ProbeSnapshot> {
+        self.snapshot_for_update_at(0.0, updated_probe)
+    }
+
+    pub fn snapshot_for_update_at(
+        &self,
+        time_s: f32,
+        updated_probe: TemperatureProbe,
+    ) -> Option<ProbeSnapshot> {
+        let box_air_updated_at_s = self.box_air_updated_at_s?;
+
         Some(ProbeSnapshot {
             box_air_temp_c: self.box_air_temp_c?,
             room_air_temp_c: self.room_air_temp_c,
             product_temp_c: self.product_temp_c,
+            box_air_age_s: time_s - box_air_updated_at_s,
+            product_age_s: self
+                .product_updated_at_s
+                .map(|updated_at| time_s - updated_at),
             updated_probe,
         })
     }
@@ -72,6 +109,8 @@ pub struct ProbeSnapshot {
     pub box_air_temp_c: f32,
     pub room_air_temp_c: Option<f32>,
     pub product_temp_c: Option<f32>,
+    pub box_air_age_s: f32,
+    pub product_age_s: Option<f32>,
     pub updated_probe: TemperatureProbe,
 }
 
@@ -98,6 +137,25 @@ impl RealRunController {
     }
 
     pub fn update(&mut self, snapshot: ProbeSnapshot) -> HeaterDecision {
+        if snapshot.box_air_age_s > self.config.max_box_air_age_s {
+            self.heater_on = false;
+            return HeaterDecision {
+                heater_on: false,
+                reason: "box_air_stale",
+            };
+        }
+
+        if snapshot
+            .product_age_s
+            .is_some_and(|age_s| age_s > self.config.max_product_age_s)
+        {
+            self.heater_on = false;
+            return HeaterDecision {
+                heater_on: false,
+                reason: "product_stale",
+            };
+        }
+
         if snapshot.box_air_temp_c >= self.config.box_air_hard_cutoff_c {
             self.heater_on = false;
             return HeaterDecision {
@@ -163,6 +221,9 @@ mod tests {
         assert_eq!(latest.room_air_temp_c, None);
         assert_eq!(latest.box_air_temp_c, None);
         assert_eq!(latest.product_temp_c, None);
+        assert_eq!(latest.room_air_updated_at_s, None);
+        assert_eq!(latest.box_air_updated_at_s, None);
+        assert_eq!(latest.product_updated_at_s, None);
         assert_eq!(latest.reading(0.0), None);
         assert_eq!(latest.snapshot_for_update(TemperatureProbe::BoxAir), None);
     }
@@ -178,6 +239,9 @@ mod tests {
         assert_eq!(latest.room_air_temp_c, Some(20.2));
         assert_eq!(latest.box_air_temp_c, Some(22.4));
         assert_eq!(latest.product_temp_c, Some(23.1));
+        assert_eq!(latest.room_air_updated_at_s, Some(0.0));
+        assert_eq!(latest.box_air_updated_at_s, Some(0.0));
+        assert_eq!(latest.product_updated_at_s, Some(0.0));
     }
 
     #[test]
@@ -215,6 +279,63 @@ mod tests {
                 box_air_temp_c: 22.4,
                 room_air_temp_c: None,
                 product_temp_c: Some(23.1),
+                box_air_age_s: 0.0,
+                product_age_s: Some(0.0),
+                updated_probe: TemperatureProbe::Product,
+            })
+        );
+    }
+
+    #[test]
+    fn latest_temperature_readings_emit_probe_snapshot_with_ages() {
+        let mut latest = LatestTemperatureReadings::new();
+
+        latest.update_at(10.0, TemperatureProbe::BoxAir, 22.4);
+        latest.update_at(20.0, TemperatureProbe::Product, 23.1);
+
+        assert_eq!(
+            latest.snapshot_for_update_at(25.0, TemperatureProbe::RoomAir),
+            Some(ProbeSnapshot {
+                box_air_temp_c: 22.4,
+                room_air_temp_c: None,
+                product_temp_c: Some(23.1),
+                box_air_age_s: 15.0,
+                product_age_s: Some(5.0),
+                updated_probe: TemperatureProbe::RoomAir,
+            })
+        );
+    }
+
+    #[test]
+    fn latest_temperature_readings_do_not_report_product_age_before_product_seen() {
+        let mut latest = LatestTemperatureReadings::new();
+
+        latest.update_at(10.0, TemperatureProbe::BoxAir, 22.4);
+
+        assert_eq!(
+            latest
+                .snapshot_for_update_at(25.0, TemperatureProbe::BoxAir)
+                .unwrap()
+                .product_age_s,
+            None
+        );
+    }
+
+    #[test]
+    fn latest_temperature_readings_do_not_require_room_air_for_snapshot() {
+        let mut latest = LatestTemperatureReadings::new();
+
+        latest.update_at(10.0, TemperatureProbe::BoxAir, 22.4);
+        latest.update_at(12.0, TemperatureProbe::Product, 23.1);
+
+        assert_eq!(
+            latest.snapshot_for_update_at(15.0, TemperatureProbe::Product),
+            Some(ProbeSnapshot {
+                box_air_temp_c: 22.4,
+                room_air_temp_c: None,
+                product_temp_c: Some(23.1),
+                box_air_age_s: 5.0,
+                product_age_s: Some(3.0),
                 updated_probe: TemperatureProbe::Product,
             })
         );
@@ -227,6 +348,8 @@ mod tests {
             box_air_temp_c: 20.0,
             room_air_temp_c: Some(20.0),
             product_temp_c: Some(20.0),
+            box_air_age_s: 0.0,
+            product_age_s: Some(0.0),
             updated_probe: TemperatureProbe::BoxAir,
         });
         assert!(decision.heater_on);
@@ -240,6 +363,8 @@ mod tests {
             box_air_temp_c: 34.0,
             room_air_temp_c: Some(20.0),
             product_temp_c: Some(30.0),
+            box_air_age_s: 0.0,
+            product_age_s: Some(0.0),
             updated_probe: TemperatureProbe::BoxAir,
         });
         assert!(!decision.heater_on);
@@ -253,10 +378,80 @@ mod tests {
             box_air_temp_c: 30.0,
             room_air_temp_c: Some(20.0),
             product_temp_c: Some(34.0),
+            box_air_age_s: 0.0,
+            product_age_s: Some(0.0),
             updated_probe: TemperatureProbe::Product,
         });
         assert!(!decision.heater_on);
         assert_eq!(decision.reason, "product_hard_cutoff");
+    }
+
+    #[test]
+    fn turns_heater_off_when_box_air_is_stale() {
+        let mut controller = RealRunController::new(RealRunConfig::default());
+
+        let decision = controller.update(ProbeSnapshot {
+            box_air_temp_c: 30.0,
+            room_air_temp_c: Some(20.0),
+            product_temp_c: Some(30.0),
+            box_air_age_s: RealRunConfig::default().max_box_air_age_s + 0.1,
+            product_age_s: Some(0.0),
+            updated_probe: TemperatureProbe::RoomAir,
+        });
+
+        assert!(!decision.heater_on);
+        assert_eq!(decision.reason, "box_air_stale");
+    }
+
+    #[test]
+    fn turns_heater_off_when_seen_product_is_stale() {
+        let mut controller = RealRunController::new(RealRunConfig::default());
+
+        let decision = controller.update(ProbeSnapshot {
+            box_air_temp_c: 30.0,
+            room_air_temp_c: Some(20.0),
+            product_temp_c: Some(30.0),
+            box_air_age_s: 0.0,
+            product_age_s: Some(RealRunConfig::default().max_product_age_s + 0.1),
+            updated_probe: TemperatureProbe::RoomAir,
+        });
+
+        assert!(!decision.heater_on);
+        assert_eq!(decision.reason, "product_stale");
+    }
+
+    #[test]
+    fn missing_product_age_does_not_force_heater_off() {
+        let mut controller = RealRunController::new(RealRunConfig::default());
+
+        let decision = controller.update(ProbeSnapshot {
+            box_air_temp_c: 20.0,
+            room_air_temp_c: Some(20.0),
+            product_temp_c: None,
+            box_air_age_s: 0.0,
+            product_age_s: None,
+            updated_probe: TemperatureProbe::BoxAir,
+        });
+
+        assert!(decision.heater_on);
+        assert_eq!(decision.reason, "below_target");
+    }
+
+    #[test]
+    fn missing_room_air_does_not_force_heater_off() {
+        let mut controller = RealRunController::new(RealRunConfig::default());
+
+        let decision = controller.update(ProbeSnapshot {
+            box_air_temp_c: 20.0,
+            room_air_temp_c: None,
+            product_temp_c: Some(20.0),
+            box_air_age_s: 0.0,
+            product_age_s: Some(0.0),
+            updated_probe: TemperatureProbe::BoxAir,
+        });
+
+        assert!(decision.heater_on);
+        assert_eq!(decision.reason, "below_target");
     }
 
     #[test]
@@ -266,6 +461,8 @@ mod tests {
             box_air_temp_c: 20.0,
             room_air_temp_c: Some(20.0),
             product_temp_c: Some(20.0),
+            box_air_age_s: 0.0,
+            product_age_s: Some(0.0),
             updated_probe: TemperatureProbe::BoxAir,
         });
         assert!(first.heater_on);
@@ -273,6 +470,8 @@ mod tests {
             box_air_temp_c: 30.5,
             room_air_temp_c: Some(19.0),
             product_temp_c: Some(20.0),
+            box_air_age_s: 0.0,
+            product_age_s: Some(0.0),
             updated_probe: TemperatureProbe::RoomAir,
         });
         assert!(second.heater_on);
@@ -286,6 +485,8 @@ mod tests {
             box_air_temp_c: 20.0,
             room_air_temp_c: Some(20.0),
             product_temp_c: Some(20.0),
+            box_air_age_s: 0.0,
+            product_age_s: Some(0.0),
             updated_probe: TemperatureProbe::BoxAir,
         });
         assert!(first.heater_on);
@@ -293,6 +494,8 @@ mod tests {
             box_air_temp_c: 31.0,
             room_air_temp_c: Some(20.0),
             product_temp_c: Some(31.0),
+            box_air_age_s: 0.0,
+            product_age_s: Some(0.0),
             updated_probe: TemperatureProbe::Product,
         });
         assert!(second.heater_on);

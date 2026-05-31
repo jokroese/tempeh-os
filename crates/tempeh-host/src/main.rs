@@ -1448,14 +1448,14 @@ where
                 continue;
             }
         };
-        latest.update(parsed.probe, parsed.temp_c);
+        let time_s = start.elapsed().as_secs_f32();
+        latest.update_at(time_s, parsed.probe, parsed.temp_c);
 
         let Some(box_air_temp_c) = latest.box_air_temp_c else {
             continue;
         };
-        let time_s = start.elapsed().as_secs_f32();
         let product_temp_c = latest.product_temp_c;
-        let Some(snapshot) = latest.snapshot_for_update(parsed.probe) else {
+        let Some(snapshot) = latest.snapshot_for_update_at(time_s, parsed.probe) else {
             continue;
         };
         let decision = controller.update(snapshot);
