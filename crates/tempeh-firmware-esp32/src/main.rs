@@ -40,10 +40,10 @@ fn main() -> Result<()> {
     let modem = peripherals.modem;
 
     let _wifi = connect_wifi(modem)?;
-    let mut tasmota_heater = TasmotaHeaterOutput::from_build_config()?;
+    let mut heater_output = TasmotaHeaterOutput::from_build_config()?;
 
-    // Start from a known safe state. Runtime decision actuation is wired in a later patch.
-    tasmota_heater.set_heater(false, "boot_safe_off")?;
+    // Start from a known safe state before reading probes or running policy.
+    heater_output.set_heater(false, "boot_safe_off")?;
 
     let mut box_air = Ds18b20::new(BOX_AIR_GPIO)?;
     let mut room_air = Ds18b20::new(ROOM_AIR_GPIO)?;
@@ -51,7 +51,6 @@ fn main() -> Result<()> {
 
     let mut latest = LatestTemperatureReadings::new();
     let mut controller = RealRunController::new(RealRunConfig::default());
-    let mut heater = DryRunHeater::new();
     let start_us = now_us();
 
     info!("Tempeh OS ESP32 temperature bridge");
@@ -60,8 +59,8 @@ fn main() -> Result<()> {
     info!("product DATA -> GPIO{PRODUCT_GPIO}");
     info!("reading three DS18B20 probes on separate 1-Wire buses");
     info!("running shared real-run policy on device");
-    info!("heater output: Tasmota HTTP; boot safety off command has been sent");
-    info!("wifi connected; tasmota actuator is not enabled yet");
+    info!("heater output: Tasmota HTTP; runtime decisions actuate the plug");
+    info!("actuator mode: send command only when desired heater state changes");
     info!(
         "control output: control,time_s,room_air_temp_c,box_air_temp_c,product_temp_c,heater_on,reason"
     );
@@ -72,27 +71,27 @@ fn main() -> Result<()> {
             &mut box_air,
             &mut latest,
             &mut controller,
-            &mut heater,
+            &mut heater_output,
             start_us,
-        );
+        )?;
         read_update_and_print(
             TemperatureProbe::RoomAir,
             &mut room_air,
             &mut latest,
             &mut controller,
-            &mut heater,
+            &mut heater_output,
             start_us,
-        );
+        )?;
         read_update_and_print(
             TemperatureProbe::Product,
             &mut product,
             &mut latest,
             &mut controller,
-            &mut heater,
+            &mut heater_output,
             start_us,
-        );
+        )?;
 
-        run_safety_tick(&latest, &mut controller, &mut heater, start_us);
+        run_safety_tick(&latest, &mut controller, &mut heater_output, start_us)?;
 
         FreeRtos::delay_ms(2_000);
     }
@@ -165,11 +164,22 @@ impl TasmotaHeaterOutput {
         Ok(Self::new(base_url))
     }
 
+    fn heater_on(&self) -> bool {
+        self.heater_on
+    }
+
     fn new(base_url: impl Into<String>) -> Self {
         Self {
             base_url: normalise_base_url(base_url.into()),
             heater_on: false,
         }
+    }
+
+    fn apply_decision(&mut self, heater_on: bool, reason: &'static str) -> Result<()> {
+        if heater_on == self.heater_on() {
+            return Ok(());
+        }
+        self.set_heater_fail_safe(heater_on, reason)
     }
 
     fn set_heater(&mut self, on: bool, reason: &'static str) -> Result<()> {
@@ -201,6 +211,32 @@ impl TasmotaHeaterOutput {
         Ok(())
     }
 
+    fn set_heater_fail_safe(&mut self, on: bool, reason: &'static str) -> Result<()> {
+        match self.set_heater(on, reason) {
+            Ok(()) => Ok(()),
+            Err(error) if on => {
+                warn!(
+                    "failed to turn heater on for reason={reason}; attempting fail-safe off: {error:#}"
+                );
+
+                if let Err(off_error) = self.set_heater(false, "actuator_on_failed_safe_off") {
+                    warn!(
+                        "fail-safe off command also failed after actuator-on error: {off_error:#}"
+                    );
+                }
+
+                Err(error).context("failed to turn heater on; fail-safe off attempted")
+            }
+            Err(error) => {
+                warn!(
+                    "failed to turn heater off for reason={reason}; actuator state is unknown: {error:#}"
+                );
+                self.heater_on = false;
+                Err(error).context("failed to turn heater off; actuator state is unknown")
+            }
+        }
+    }
+
     fn command_url(&self, on: bool) -> String {
         let command = if on { "Power%20On" } else { "Power%20Off" };
         format!("{}/cm?cmnd={command}", self.base_url)
@@ -222,9 +258,9 @@ fn read_update_and_print(
     probe: &mut Ds18b20,
     latest: &mut LatestTemperatureReadings,
     controller: &mut RealRunController,
-    heater: &mut DryRunHeater,
+    heater_output: &mut TasmotaHeaterOutput,
     start_us: i64,
-) {
+) -> Result<()> {
     match probe.read_temperature_c() {
         Ok(temp_c) => {
             let time_s = elapsed_s(start_us);
@@ -233,61 +269,53 @@ fn read_update_and_print(
 
             latest.update_at(time_s, probe_kind, temp_c);
 
-            if let Some(sample) = controller.update_sample(time_s, latest, probe_kind) {
-                emit_control_sample(sample, heater);
-            }
+            emit_control_sample(time_s, probe_kind, latest, controller, heater_output)?;
         }
         Err(error) => {
             warn!("{probe_kind:?} read failed: {error:#}");
         }
     }
+
+    Ok(())
 }
 
 fn run_safety_tick(
     latest: &LatestTemperatureReadings,
     controller: &mut RealRunController,
-    heater: &mut DryRunHeater,
+    heater_output: &mut TasmotaHeaterOutput,
     start_us: i64,
-) {
+) -> Result<()> {
     let time_s = elapsed_s(start_us);
 
     if let Some(sample) = controller.tick_sample(time_s, latest) {
-        emit_control_sample(sample, heater);
-    }
-}
-
-fn emit_control_sample(sample: RealRunSample, heater: &mut DryRunHeater) {
-    println!("{}", control_sample_line(sample));
-    heater.apply(sample);
-}
-
-fn control_sample_line(sample: RealRunSample) -> String {
-    format!("control,{}", sample.csv_row())
-}
-
-#[derive(Debug, Clone, Copy)]
-struct DryRunHeater {
-    heater_on: bool,
-}
-
-impl DryRunHeater {
-    fn new() -> Self {
-        Self { heater_on: false }
+        apply_and_print_control_sample(sample, heater_output)?;
     }
 
-    fn apply(&mut self, sample: RealRunSample) {
-        if self.heater_on == sample.heater_on {
-            return;
-        }
+    Ok(())
+}
 
-        self.heater_on = sample.heater_on;
-
-        println!(
-            "heater,dry_run,{state},{reason}",
-            state = if self.heater_on { "on" } else { "off" },
-            reason = sample.reason,
-        );
+fn emit_control_sample(
+    time_s: f32,
+    updated_probe: TemperatureProbe,
+    latest: &LatestTemperatureReadings,
+    controller: &mut RealRunController,
+    heater_output: &mut TasmotaHeaterOutput,
+) -> Result<()> {
+    if let Some(sample) = controller.update_sample(time_s, latest, updated_probe) {
+        apply_and_print_control_sample(sample, heater_output)?;
     }
+
+    Ok(())
+}
+
+fn apply_and_print_control_sample(
+    sample: RealRunSample,
+    heater_output: &mut TasmotaHeaterOutput,
+) -> Result<()> {
+    heater_output.apply_decision(sample.heater_on, sample.reason)?;
+
+    println!("control,{}", sample.csv_row());
+    Ok(())
 }
 
 fn now_us() -> i64 {

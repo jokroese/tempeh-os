@@ -106,7 +106,7 @@ Then:
 ESPFLASH_PORT=/dev/cu.usbmodem1234561 cargo run --release
 ```
 
-On boot, the ESP32 sends a Tasmota Power Off command before continuing normal probe reads and dry-run policy output.
+On boot, the ESP32 sends a Tasmota Power Off command before continuing normal probe reads. It then applies shared runtime decisions to the configured Tasmota plug, sending HTTP commands only when the desired heater state changes.
 
 The firmware currently reads three DS18B20 probes on separate pins:
 
