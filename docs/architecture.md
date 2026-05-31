@@ -120,7 +120,8 @@ This crate currently:
 - reads DS18B20 probes;
 - emits `temp,...` lines;
 - runs `tempeh-runtime::RealRunController` on-device;
-- emits diagnostic `control,...` rows.
+- emits diagnostic `control,...` rows;
+- applies policy decisions to a dry-run heater output.
 
 It does not actuate the heater yet.
 
@@ -167,7 +168,7 @@ Any heater-actuating implementation must preserve these invariants:
 - failed actuator commands must be visible in logs;
 - control decisions and actuator state should be distinguishable in logs.
 
-Before firmware actuates real heat, it should also run the policy on a periodic tick, not only after successful probe reads. Otherwise, if every probe read fails, no new policy decision is emitted.
+Firmware runs the policy on a periodic safety tick, not only after successful probe reads. This allows stale-reading safety to turn the heater output off even if probe reads stop producing fresh values.
 
 ## Path to laptop-free operation
 
@@ -188,13 +189,13 @@ The next actuator design decision is the heater adapter:
 
 These have different failure modes and should not be mixed casually.
 
-The preferred next implementation step is a firmware-side heater abstraction in dry-run mode:
+The current firmware-side heater output is dry-run only:
 
 ```text
 RealRunController -> FirmwareHeaterOutput -> dry-run log
 ```
 
-After that, implement exactly one real actuator backend.
+The next implementation step is to replace or wrap the dry-run output with exactly one real actuator backend.
 
 ## Dependency direction
 

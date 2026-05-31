@@ -35,6 +35,7 @@ fn main() -> Result<()> {
 
     let mut latest = LatestTemperatureReadings::new();
     let mut controller = RealRunController::new(RealRunConfig::default());
+    let mut heater = DryRunHeater::new();
     let start_us = now_us();
 
     info!("Tempeh OS ESP32 temperature bridge");
@@ -43,6 +44,7 @@ fn main() -> Result<()> {
     info!("product DATA -> GPIO{PRODUCT_GPIO}");
     info!("reading three DS18B20 probes on separate 1-Wire buses");
     info!("running shared real-run policy on device");
+    info!("heater output: dry-run only; no physical heater is actuated");
     info!(
         "control output: control,time_s,room_air_temp_c,box_air_temp_c,product_temp_c,heater_on,reason"
     );
@@ -53,6 +55,7 @@ fn main() -> Result<()> {
             &mut box_air,
             &mut latest,
             &mut controller,
+            &mut heater,
             start_us,
         );
         read_update_and_print(
@@ -60,6 +63,7 @@ fn main() -> Result<()> {
             &mut room_air,
             &mut latest,
             &mut controller,
+            &mut heater,
             start_us,
         );
         read_update_and_print(
@@ -67,8 +71,11 @@ fn main() -> Result<()> {
             &mut product,
             &mut latest,
             &mut controller,
+            &mut heater,
             start_us,
         );
+
+        run_safety_tick(&latest, &mut controller, &mut heater, start_us);
 
         FreeRtos::delay_ms(2_000);
     }
@@ -79,6 +86,7 @@ fn read_update_and_print(
     probe: &mut Ds18b20,
     latest: &mut LatestTemperatureReadings,
     controller: &mut RealRunController,
+    heater: &mut DryRunHeater,
     start_us: i64,
 ) {
     match probe.read_temperature_c() {
@@ -90,7 +98,7 @@ fn read_update_and_print(
             latest.update_at(time_s, probe_kind, temp_c);
 
             if let Some(sample) = controller.update_sample(time_s, latest, probe_kind) {
-                println!("{}", control_sample_line(sample));
+                emit_control_sample(sample, heater);
             }
         }
         Err(error) => {
@@ -99,8 +107,51 @@ fn read_update_and_print(
     }
 }
 
+fn run_safety_tick(
+    latest: &LatestTemperatureReadings,
+    controller: &mut RealRunController,
+    heater: &mut DryRunHeater,
+    start_us: i64,
+) {
+    let time_s = elapsed_s(start_us);
+
+    if let Some(sample) = controller.tick_sample(time_s, latest) {
+        emit_control_sample(sample, heater);
+    }
+}
+
+fn emit_control_sample(sample: RealRunSample, heater: &mut DryRunHeater) {
+    println!("{}", control_sample_line(sample));
+    heater.apply(sample);
+}
+
 fn control_sample_line(sample: RealRunSample) -> String {
     format!("control,{}", sample.csv_row())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DryRunHeater {
+    heater_on: bool,
+}
+
+impl DryRunHeater {
+    fn new() -> Self {
+        Self { heater_on: false }
+    }
+
+    fn apply(&mut self, sample: RealRunSample) {
+        if self.heater_on == sample.heater_on {
+            return;
+        }
+
+        self.heater_on = sample.heater_on;
+
+        println!(
+            "heater,dry_run,{state},{reason}",
+            state = if self.heater_on { "on" } else { "off" },
+            reason = sample.reason,
+        );
+    }
 }
 
 fn now_us() -> i64 {

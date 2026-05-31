@@ -115,6 +115,12 @@ pub struct ProbeSnapshot {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RealRunUpdate {
+    Probe(TemperatureProbe),
+    Tick,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RealRunSample {
     pub time_s: f32,
     pub room_air_temp_c: Option<f32>,
@@ -230,14 +236,22 @@ impl RealRunController {
         }
     }
 
-    pub fn update_sample(
+    pub fn evaluate_sample(
         &mut self,
         time_s: f32,
         latest: &LatestTemperatureReadings,
-        updated_probe: TemperatureProbe,
+        update: RealRunUpdate,
     ) -> Option<RealRunSample> {
+        let updated_probe = match update {
+            RealRunUpdate::Probe(probe) => probe,
+            RealRunUpdate::Tick => TemperatureProbe::BoxAir,
+        };
+
         let snapshot = latest.snapshot_for_update_at(time_s, updated_probe)?;
-        let decision = self.update(snapshot);
+        let decision = match update {
+            RealRunUpdate::Probe(_) => self.update(snapshot),
+            RealRunUpdate::Tick => self.tick(snapshot),
+        };
 
         Some(RealRunSample {
             time_s,
@@ -247,6 +261,68 @@ impl RealRunController {
             heater_on: decision.heater_on,
             reason: decision.reason,
         })
+    }
+
+    pub fn update_sample(
+        &mut self,
+        time_s: f32,
+        latest: &LatestTemperatureReadings,
+        updated_probe: TemperatureProbe,
+    ) -> Option<RealRunSample> {
+        self.evaluate_sample(time_s, latest, RealRunUpdate::Probe(updated_probe))
+    }
+
+    pub fn tick_sample(
+        &mut self,
+        time_s: f32,
+        latest: &LatestTemperatureReadings,
+    ) -> Option<RealRunSample> {
+        self.evaluate_sample(time_s, latest, RealRunUpdate::Tick)
+    }
+
+    fn tick(&mut self, snapshot: ProbeSnapshot) -> HeaterDecision {
+        if snapshot.box_air_age_s > self.config.max_box_air_age_s {
+            self.heater_on = false;
+            return HeaterDecision {
+                heater_on: false,
+                reason: "box_air_stale",
+            };
+        }
+
+        if snapshot
+            .product_age_s
+            .is_some_and(|age_s| age_s > self.config.max_product_age_s)
+        {
+            self.heater_on = false;
+            return HeaterDecision {
+                heater_on: false,
+                reason: "product_stale",
+            };
+        }
+
+        if snapshot.box_air_temp_c >= self.config.box_air_hard_cutoff_c {
+            self.heater_on = false;
+            return HeaterDecision {
+                heater_on: false,
+                reason: "box_air_hard_cutoff",
+            };
+        }
+
+        if snapshot
+            .product_temp_c
+            .is_some_and(|temp| temp >= self.config.product_hard_cutoff_c)
+        {
+            self.heater_on = false;
+            return HeaterDecision {
+                heater_on: false,
+                reason: "product_hard_cutoff",
+            };
+        }
+
+        HeaterDecision {
+            heater_on: self.heater_on,
+            reason: "safety_tick",
+        }
     }
 
     pub fn heater_on(&self) -> bool {
@@ -468,6 +544,89 @@ mod tests {
             controller.update_sample(10.0, &latest, TemperatureProbe::Product),
             None
         );
+    }
+
+    #[test]
+    fn tick_can_turn_heater_off_when_box_air_is_stale() {
+        let mut latest = LatestTemperatureReadings::new();
+        let mut controller = RealRunController::new(RealRunConfig::default());
+
+        latest.update_at(0.0, TemperatureProbe::BoxAir, 20.0);
+
+        let first = controller
+            .update_sample(0.0, &latest, TemperatureProbe::BoxAir)
+            .expect("initial sample");
+        assert!(first.heater_on);
+        assert_eq!(first.reason, "below_target");
+
+        let stale_time = RealRunConfig::default().max_box_air_age_s + 0.1;
+        let tick = controller
+            .tick_sample(stale_time, &latest)
+            .expect("tick sample");
+
+        assert!(!tick.heater_on);
+        assert_eq!(tick.reason, "box_air_stale");
+    }
+
+    #[test]
+    fn tick_can_turn_heater_off_when_seen_product_is_stale() {
+        let mut latest = LatestTemperatureReadings::new();
+        let mut controller = RealRunController::new(RealRunConfig::default());
+
+        latest.update_at(0.0, TemperatureProbe::BoxAir, 20.0);
+        latest.update_at(0.0, TemperatureProbe::Product, 20.0);
+
+        let first = controller
+            .update_sample(0.0, &latest, TemperatureProbe::BoxAir)
+            .expect("initial sample");
+        assert!(first.heater_on);
+
+        let stale_time = RealRunConfig::default().max_product_age_s + 0.1;
+        latest.update_at(stale_time - 1.0, TemperatureProbe::BoxAir, 20.0);
+        let tick = controller
+            .tick_sample(stale_time, &latest)
+            .expect("tick sample");
+
+        assert!(!tick.heater_on);
+        assert_eq!(tick.reason, "product_stale");
+    }
+
+    #[test]
+    fn tick_does_not_turn_heater_on_from_old_but_valid_box_air() {
+        let mut latest = LatestTemperatureReadings::new();
+        let mut controller = RealRunController::new(RealRunConfig::default());
+
+        latest.update_at(0.0, TemperatureProbe::BoxAir, 20.0);
+
+        let tick = controller.tick_sample(1.0, &latest).expect("tick sample");
+
+        assert!(!tick.heater_on);
+        assert_eq!(tick.reason, "safety_tick");
+    }
+
+    #[test]
+    fn probe_update_still_turns_heater_on_from_fresh_box_air() {
+        let mut latest = LatestTemperatureReadings::new();
+        let mut controller = RealRunController::new(RealRunConfig::default());
+
+        latest.update_at(0.0, TemperatureProbe::BoxAir, 20.0);
+
+        let sample = controller
+            .evaluate_sample(0.0, &latest, RealRunUpdate::Probe(TemperatureProbe::BoxAir))
+            .expect("probe sample");
+
+        assert!(sample.heater_on);
+        assert_eq!(sample.reason, "below_target");
+    }
+
+    #[test]
+    fn tick_returns_no_sample_without_box_air() {
+        let mut latest = LatestTemperatureReadings::new();
+        let mut controller = RealRunController::new(RealRunConfig::default());
+
+        latest.update_at(0.0, TemperatureProbe::Product, 20.0);
+
+        assert_eq!(controller.tick_sample(1.0, &latest), None);
     }
 
     #[test]
