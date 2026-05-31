@@ -17,6 +17,10 @@ The physical prototype is documented in `docs/hardware/`. Hardware v0 is a proto
 - `tempeh-host` owns the laptop-side CLI, serial reader, CSV logging, Tasmota HTTP control, and live UI.
 - `tempeh-firmware-esp32` owns ESP32-side probe reading and on-device real-run policy evaluation.
 
+## Architecture
+
+See [`docs/architecture.md`](docs/architecture.md) for crate responsibilities, the current host/firmware control boundary, and the path towards laptop-free operation.
+
 ## Run
 
 ```bash
