@@ -20,6 +20,8 @@ firmware-deps:
     fi
 check: fmt test help smoke-stdin firmware-deps
 firmware-build:
+    test -f crates/tempeh-firmware-esp32/firmware.local.toml || { echo "create crates/tempeh-firmware-esp32/firmware.local.toml first" >&2; exit 1; }
     cd crates/tempeh-firmware-esp32 && . ~/export-esp.sh && cargo build --release
 firmware-flash port:
+    test -f crates/tempeh-firmware-esp32/firmware.local.toml || { echo "create crates/tempeh-firmware-esp32/firmware.local.toml first" >&2; exit 1; }
     cd crates/tempeh-firmware-esp32 && . ~/export-esp.sh && ESPFLASH_PORT={{port}} cargo run --release

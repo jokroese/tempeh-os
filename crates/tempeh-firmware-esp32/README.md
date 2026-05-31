@@ -60,10 +60,34 @@ Load the ESP environment:
 
 ## Flash
 
-From this directory:
+The firmware connects to Wi-Fi on boot. Create a local firmware config file:
+
+```bash
+cp firmware.local.example.toml firmware.local.toml
+```
+
+Then edit:
+
+```toml
+[wifi]
+ssid = "your-wifi-name"
+password = "your-wifi-password"
+```
+
+`firmware.local.toml` is ignored by Git. Do not commit real Wi-Fi credentials.
+
+Then flash from this directory:
 
 ```bash
 ESPFLASH_PORT=/dev/cu.usbmodem1234561 cargo run --release
+```
+
+The firmware currently uses Wi-Fi only as preparation for ESP32-side Tasmota control. It does not send heater commands yet.
+
+Expected boot log includes:
+
+```text
+Wi-Fi connected: ip=...
 ```
 
 After flashing, run the host-side smoke test from the repository root:

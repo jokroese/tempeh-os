@@ -2,3 +2,4 @@
 /sdkconfig
 /sdkconfig.old
 .embuild
+firmware.local.toml

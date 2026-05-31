@@ -86,6 +86,20 @@ Flash and monitor the ESP32-S3 (from the firmware crate directory):
 
 ```bash
 cd crates/tempeh-firmware-esp32
+cp firmware.local.example.toml firmware.local.toml
+```
+
+Edit `firmware.local.toml`:
+
+```toml
+[wifi]
+ssid = "your-wifi-name"
+password = "your-wifi-password"
+```
+
+Then:
+
+```bash
 ESPFLASH_PORT=/dev/cu.usbmodem1234561 cargo run --release
 ```
 

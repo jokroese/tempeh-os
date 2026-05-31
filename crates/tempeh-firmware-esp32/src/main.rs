@@ -1,7 +1,11 @@
 use anyhow::{Context, Result, bail};
 use esp_idf_hal::delay::{Ets, FreeRtos};
+use esp_idf_hal::modem::Modem;
 use esp_idf_hal::peripherals::Peripherals;
+use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::log::EspLogger;
+use esp_idf_svc::nvs::EspDefaultNvsPartition;
+use esp_idf_svc::wifi::{BlockingWifi, ClientConfiguration, Configuration, EspWifi};
 use esp_idf_sys::{
     esp, esp_timer_get_time, gpio_config, gpio_config_t, gpio_get_level,
     gpio_int_type_t_GPIO_INTR_DISABLE, gpio_mode_t_GPIO_MODE_INPUT_OUTPUT_OD, gpio_num_t,
@@ -19,6 +23,8 @@ const PRODUCT_GPIO: i32 = 4;
 const DS18B20_SKIP_ROM: u8 = 0xCC;
 const DS18B20_CONVERT_T: u8 = 0x44;
 const DS18B20_READ_SCRATCHPAD: u8 = 0xBE;
+const WIFI_SSID: Option<&str> = option_env!("TEMPEH_WIFI_SSID");
+const WIFI_PASSWORD: Option<&str> = option_env!("TEMPEH_WIFI_PASSWORD");
 
 fn main() -> Result<()> {
     esp_idf_svc::sys::link_patches();
@@ -28,6 +34,9 @@ fn main() -> Result<()> {
     let _box_air_pin = peripherals.pins.gpio5;
     let _room_air_pin = peripherals.pins.gpio6;
     let _product_pin = peripherals.pins.gpio4;
+    let modem = peripherals.modem;
+
+    let _wifi = connect_wifi(modem)?;
 
     let mut box_air = Ds18b20::new(BOX_AIR_GPIO)?;
     let mut room_air = Ds18b20::new(ROOM_AIR_GPIO)?;
@@ -45,6 +54,7 @@ fn main() -> Result<()> {
     info!("reading three DS18B20 probes on separate 1-Wire buses");
     info!("running shared real-run policy on device");
     info!("heater output: dry-run only; no physical heater is actuated");
+    info!("wifi connected; tasmota actuator is not enabled yet");
     info!(
         "control output: control,time_s,room_air_temp_c,box_air_temp_c,product_temp_c,heater_on,reason"
     );
@@ -79,6 +89,54 @@ fn main() -> Result<()> {
 
         FreeRtos::delay_ms(2_000);
     }
+}
+
+fn connect_wifi(modem: Modem) -> Result<BlockingWifi<EspWifi<'static>>> {
+    let ssid = WIFI_SSID.unwrap_or_default();
+    let password = WIFI_PASSWORD.unwrap_or_default();
+
+    if ssid.is_empty() {
+        bail!(
+            "TEMPEH_WIFI_SSID is not set at build time. Copy firmware.local.example.toml to firmware.local.toml and set [wifi] ssid/password."
+        );
+    }
+
+    let sysloop = EspSystemEventLoop::take().context("failed to take ESP system event loop")?;
+    let nvs = EspDefaultNvsPartition::take().context("failed to take default NVS partition")?;
+
+    let wifi = EspWifi::new(modem, sysloop.clone(), Some(nvs)).context("failed to create Wi-Fi")?;
+    let mut wifi = BlockingWifi::wrap(wifi, sysloop).context("failed to wrap blocking Wi-Fi")?;
+
+    let configuration = Configuration::Client(ClientConfiguration {
+        ssid: ssid
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("TEMPEH_WIFI_SSID is too long"))?,
+        password: password
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("TEMPEH_WIFI_PASSWORD is too long"))?,
+        ..Default::default()
+    });
+
+    info!("connecting Wi-Fi to SSID {ssid:?}");
+    wifi.set_configuration(&configuration)
+        .context("failed to configure Wi-Fi")?;
+    wifi.start().context("failed to start Wi-Fi")?;
+    wifi.connect().context("failed to connect Wi-Fi")?;
+    wifi.wait_netif_up()
+        .context("Wi-Fi netif did not come up")?;
+
+    let ip_info = wifi
+        .wifi()
+        .sta_netif()
+        .get_ip_info()
+        .context("failed to read Wi-Fi IP info")?;
+
+    info!(
+        "Wi-Fi connected: ip={}, subnet={}, gateway={}",
+        ip_info.ip, ip_info.subnet.mask, ip_info.subnet.gateway
+    );
+
+    Ok(wifi)
 }
 
 fn read_update_and_print(
