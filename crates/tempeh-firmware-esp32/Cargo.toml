@@ -5,6 +5,8 @@ edition.workspace = true
 resolver = "2"
 
 [dependencies]
+tempeh-model.workspace = true
+tempeh-runtime.workspace = true
 anyhow.workspace = true
 esp-idf-hal.workspace = true
 esp-idf-svc.workspace = true

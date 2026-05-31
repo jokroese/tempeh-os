@@ -8,6 +8,8 @@ use esp_idf_sys::{
     gpio_pullup_t_GPIO_PULLUP_ENABLE, gpio_set_level,
 };
 use log::{info, warn};
+use tempeh_model::TemperatureProbe;
+use tempeh_runtime::{LatestTemperatureReadings, RealRunConfig, RealRunController};
 
 const BOX_AIR_GPIO: i32 = 5;
 const ROOM_AIR_GPIO: i32 = 6;
@@ -20,6 +22,8 @@ const DS18B20_READ_SCRATCHPAD: u8 = 0xBE;
 fn main() -> Result<()> {
     esp_idf_svc::sys::link_patches();
     EspLogger::initialize_default();
+
+    log_runtime_policy_smoke_check();
 
     let peripherals = Peripherals::take()?;
     let _box_air_pin = peripherals.pins.gpio5;
@@ -43,6 +47,26 @@ fn main() -> Result<()> {
 
         FreeRtos::delay_ms(2_000);
     }
+}
+
+fn log_runtime_policy_smoke_check() {
+    let mut latest = LatestTemperatureReadings::new();
+    latest.update_at(0.0, TemperatureProbe::BoxAir, 20.0);
+    latest.update_at(0.0, TemperatureProbe::Product, 20.0);
+
+    let Some(snapshot) = latest.snapshot_for_update_at(0.0, TemperatureProbe::BoxAir) else {
+        warn!("shared runtime policy smoke check could not create snapshot");
+        return;
+    };
+
+    let mut controller = RealRunController::new(RealRunConfig::default());
+    let decision = controller.update(snapshot);
+
+    info!(
+        "shared runtime policy smoke check: heater_on={}, reason={}",
+        if decision.heater_on { 1 } else { 0 },
+        decision.reason
+    );
 }
 
 fn read_and_print(label: &str, probe: &mut Ds18b20) {

@@ -2008,6 +2008,8 @@ dependencies = [
  "esp-idf-svc",
  "esp-idf-sys",
  "log",
+ "tempeh-model",
+ "tempeh-runtime",
 ]
 
 [[package]]
