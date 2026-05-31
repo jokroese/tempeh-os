@@ -1,0 +1,18 @@
+[package]
+name = "tempeh-firmware-esp32"
+version.workspace = true
+edition.workspace = true
+resolver = "2"
+
+[dependencies]
+anyhow.workspace = true
+esp-idf-hal.workspace = true
+esp-idf-svc.workspace = true
+esp-idf-sys.workspace = true
+log.workspace = true
+
+[build-dependencies]
+embuild.workspace = true
+
+[package.metadata.esp-idf-sys]
+esp_idf_version = "v5.4.1"

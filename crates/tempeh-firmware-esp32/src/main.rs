@@ -4,8 +4,8 @@ use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_svc::log::EspLogger;
 use esp_idf_sys::{
     esp, gpio_config, gpio_config_t, gpio_get_level, gpio_int_type_t_GPIO_INTR_DISABLE,
-    gpio_mode_t_GPIO_MODE_INPUT_OUTPUT_OD, gpio_num_t, gpio_pullup_t_GPIO_PULLUP_ENABLE,
-    gpio_pulldown_t_GPIO_PULLDOWN_DISABLE, gpio_set_level,
+    gpio_mode_t_GPIO_MODE_INPUT_OUTPUT_OD, gpio_num_t, gpio_pulldown_t_GPIO_PULLDOWN_DISABLE,
+    gpio_pullup_t_GPIO_PULLUP_ENABLE, gpio_set_level,
 };
 use log::{info, warn};
 

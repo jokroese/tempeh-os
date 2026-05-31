@@ -56,7 +56,7 @@ temp,product,23.125
 Flash the ESP32 firmware:
 
 ```bash
-cd firmware/esp32-temperature-bridge
+cd crates/tempeh-firmware-esp32
 ESPFLASH_PORT=/dev/cu.usbmodem1234561 cargo run --release
 ```
 
@@ -74,7 +74,7 @@ ESPFLASH_PORT=/dev/cu.usbmodem1234561 cargo run --release
 
 - `box_air`: air temperature at rack/food height, GPIO5, used for normal heater control.
 - `room_air`: ambient room temperature outside the incubator, GPIO6, logged only.
-- `product`: bean mass / bag-adjacent temperature, GPIO4, used for safety cutoff.
+- `product`: bean mass / bag-adjacent temperature, GPIO4, logged and used as hard safety cutoff by the host controller.
 
 ## First test protocol
 

@@ -46,16 +46,16 @@ From this directory:
 ESPFLASH_PORT=/dev/cu.usbmodem1234561 cargo run --release
 ```
 
-After flashing, the host-side smoke test should see CSV:
+After flashing, run the host-side smoke test from the repository root:
 
 ```bash
-cargo run --manifest-path ../../Cargo.toml -- thermometer-test /dev/cu.usbmodem1234561
+cargo run -p tempeh-host -- thermometer-test /dev/cu.usbmodem1234561
 ```
 
 For a supervised heat-mat control run from the repository root:
 
 ```bash
-cargo run -- real-control-test /dev/cu.usbmodem1234561 http://192.168.8.193 out/heat-mat-empty-box-01.csv
+cargo run -p tempeh-host -- real-control-test /dev/cu.usbmodem1234561 http://192.168.8.193 out/heat-mat-empty-box-01.csv
 ```
 
 Expected host output:

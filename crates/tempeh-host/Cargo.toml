@@ -1,0 +1,20 @@
+[package]
+name = "tempeh-host"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tempeh-model.workspace = true
+tempeh-sim.workspace = true
+tempeh-control.workspace = true
+tempeh-pet.workspace = true
+tempeh-runtime.workspace = true
+serialport.workspace = true
+ctrlc.workspace = true
+chrono.workspace = true
+axum.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+async-stream.workspace = true
+futures-util.workspace = true

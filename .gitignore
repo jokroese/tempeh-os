@@ -6,3 +6,5 @@
 .repomixignore
 repomix.config.json
 repomix-output.xml
+
+.embuild

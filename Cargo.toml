@@ -1,13 +1,33 @@
-[package]
-name = "tempeh-os"
+[workspace]
+resolver = "2"
+members = [
+    "crates/tempeh-model",
+    "crates/tempeh-control",
+    "crates/tempeh-sim",
+    "crates/tempeh-pet",
+    "crates/tempeh-runtime",
+    "crates/tempeh-host",
+    "crates/tempeh-firmware-esp32",
+]
+default-members = [
+    "crates/tempeh-model",
+    "crates/tempeh-control",
+    "crates/tempeh-sim",
+    "crates/tempeh-pet",
+    "crates/tempeh-runtime",
+    "crates/tempeh-host",
+]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 
-[dependencies]
+[workspace.dependencies]
 tempeh-model = { path = "crates/tempeh-model" }
-tempeh-sim = { path = "crates/tempeh-sim" }
 tempeh-control = { path = "crates/tempeh-control" }
+tempeh-sim = { path = "crates/tempeh-sim" }
 tempeh-pet = { path = "crates/tempeh-pet" }
+tempeh-runtime = { path = "crates/tempeh-runtime" }
 serialport = "4"
 ctrlc = "3"
 chrono = "0.4"
@@ -17,15 +37,16 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 async-stream = "0.3"
 futures-util = "0.3"
+ureq = "2"
+anyhow = "1"
+esp-idf-hal = "0.45"
+esp-idf-svc = "0.51"
+esp-idf-sys = { version = "0.36", features = ["binstart"] }
+log = "0.4"
+embuild = "0.33"
 
-[workspace]
-members = [
-    "crates/tempeh-model",
-    "crates/tempeh-sim",
-    "crates/tempeh-control",
-    "crates/tempeh-pet",
-]
-
-exclude = [
-    "firmware/esp32-temperature-bridge",
-]
+[profile.release.package.tempeh-firmware-esp32]
+opt-level = "s"
+debug = true
+strip = false
+codegen-units = 1

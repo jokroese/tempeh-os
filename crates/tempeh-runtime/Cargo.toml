@@ -1,7 +1,8 @@
 [package]
-name = "tempeh-pet"
+name = "tempeh-runtime"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
 tempeh-model.workspace = true
+tempeh-control.workspace = true

@@ -1,9 +1,9 @@
 [package]
 name = "tempeh-control"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
-tempeh-model = { path = "../tempeh-model" }
-tempeh-sim = { path = "../tempeh-sim" }
-ureq = "2"
+tempeh-model.workspace = true
+tempeh-sim.workspace = true
+ureq.workspace = true
