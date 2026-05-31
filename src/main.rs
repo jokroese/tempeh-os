@@ -28,6 +28,8 @@ use tokio::sync::broadcast;
 const DEFAULT_SERIAL_BAUD: u32 = 115_200;
 const DEFAULT_LIVE_ADDR: &str = "127.0.0.1:8787";
 const LIVE_RING_CAPACITY: usize = 10_800;
+const BOX_AIR_HARD_CUTOFF_C: f32 = 34.0;
+const PRODUCT_HARD_CUTOFF_C: f32 = 34.0;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let command = env::args().nth(1).unwrap_or_else(|| "html".to_string());
@@ -902,7 +904,7 @@ fn run_trace_control_test_steps(
 struct LatestTemperatureReadings {
     room_air_temp_c: Option<f32>,
     box_air_temp_c: Option<f32>,
-    tempeh_core_temp_c: Option<f32>,
+    product_temp_c: Option<f32>,
 }
 
 impl LatestTemperatureReadings {
@@ -910,7 +912,7 @@ impl LatestTemperatureReadings {
         Self {
             room_air_temp_c: None,
             box_air_temp_c: None,
-            tempeh_core_temp_c: None,
+            product_temp_c: None,
         }
     }
 
@@ -918,7 +920,7 @@ impl LatestTemperatureReadings {
         match probe {
             TemperatureProbe::RoomAir => self.room_air_temp_c = Some(temp_c),
             TemperatureProbe::BoxAir => self.box_air_temp_c = Some(temp_c),
-            TemperatureProbe::Product => self.tempeh_core_temp_c = Some(temp_c),
+            TemperatureProbe::Product => self.product_temp_c = Some(temp_c),
         }
     }
 
@@ -927,7 +929,7 @@ impl LatestTemperatureReadings {
             time_s,
             room_air_temp_c: self.room_air_temp_c,
             box_air_temp_c: self.box_air_temp_c?,
-            tempeh_core_temp_c: self.tempeh_core_temp_c,
+            product_temp_c: self.product_temp_c,
         })
     }
 }
@@ -938,7 +940,7 @@ struct LiveSample {
     time_s: f32,
     room_air_temp_c: Option<f32>,
     box_air_temp_c: f32,
-    assumed_tempeh_core_temp_c: f32,
+    product_temp_c: Option<f32>,
     heater_on: bool,
     reason: &'static str,
 }
@@ -973,7 +975,7 @@ impl LiveRunState {
         time_s: f32,
         room_air_temp_c: Option<f32>,
         box_air_temp_c: f32,
-        assumed_tempeh_core_temp_c: f32,
+        product_temp_c: Option<f32>,
         heater_on: bool,
         reason: &'static str,
     ) -> LiveSample {
@@ -982,7 +984,7 @@ impl LiveRunState {
             time_s,
             room_air_temp_c,
             box_air_temp_c,
-            assumed_tempeh_core_temp_c,
+            product_temp_c,
             heater_on,
             reason,
         };
@@ -1035,7 +1037,7 @@ impl LiveAppState {
         time_s: f32,
         room_air_temp_c: Option<f32>,
         box_air_temp_c: f32,
-        assumed_tempeh_core_temp_c: f32,
+        product_temp_c: Option<f32>,
         heater_on: bool,
         reason: &'static str,
     ) {
@@ -1045,7 +1047,7 @@ impl LiveAppState {
                 time_s,
                 room_air_temp_c,
                 box_air_temp_c,
-                assumed_tempeh_core_temp_c,
+                product_temp_c,
                 heater_on,
                 reason,
             )
@@ -1267,7 +1269,7 @@ fn run_real_control_test(
     eprintln!("Saving data to {csv_path}.");
     eprintln!("Press Ctrl-C to stop.");
 
-    let header = "time_s,room_air_temp_c,box_air_temp_c,assumed_tempeh_core_temp_c,heater_on,reason";
+    let header = "time_s,room_air_temp_c,box_air_temp_c,product_temp_c,heater_on,reason";
     let mut csv_log = CsvLog::create(&csv_path, header)?;
 
     // Start from a known safe state.
@@ -1331,7 +1333,7 @@ fn run_real_control_live(
         })?;
     }
 
-    let header = "time_s,room_air_temp_c,box_air_temp_c,assumed_tempeh_core_temp_c,heater_on,reason";
+    let header = "time_s,room_air_temp_c,box_air_temp_c,product_temp_c,heater_on,reason";
     let mut csv_log = CsvLog::create(&csv_path, header)?;
     let live_state = Arc::new(LiveAppState::new(csv_path.clone()));
     let server_handle = spawn_live_server(Arc::clone(&live_state), addr);
@@ -1435,17 +1437,14 @@ where
             continue;
         };
         let time_s = start.elapsed().as_secs_f32();
-        let assumed_tempeh_core_temp_c = box_air_temp_c;
-
-        let mut heater_on = last_heater_on;
-        let reason = match parsed.probe {
-            TemperatureProbe::BoxAir => {
-                heater_on = controller.update(box_air_temp_c);
-                control_reason(box_air_temp_c, heater_on, last_heater_on)
-            }
-            TemperatureProbe::RoomAir => "room_update",
-            TemperatureProbe::Product => "product_update",
-        };
+        let product_temp_c = latest.product_temp_c;
+        let (heater_on, reason) = decide_real_heater_state(
+            &mut controller,
+            box_air_temp_c,
+            product_temp_c,
+            last_heater_on,
+            parsed.probe,
+        );
 
         if heater_on != last_heater_on {
             heater
@@ -1463,8 +1462,11 @@ where
         let room_air_text = room_air_temp_c
             .map(|temp| format!("{temp:.3}"))
             .unwrap_or_default();
+        let product_text = product_temp_c
+            .map(|temp| format!("{temp:.3}"))
+            .unwrap_or_default();
         let row = format!(
-            "{time_s:.0},{room_air_text},{box_air_temp_c:.3},{assumed_tempeh_core_temp_c:.3},{heater_on_int},{reason}",
+            "{time_s:.0},{room_air_text},{box_air_temp_c:.3},{product_text},{heater_on_int},{reason}",
             heater_on_int = if heater_on { 1 } else { 0 },
         );
         println!("{row}");
@@ -1475,7 +1477,7 @@ where
                 time_s,
                 room_air_temp_c,
                 box_air_temp_c,
-                assumed_tempeh_core_temp_c,
+                product_temp_c,
                 heater_on,
                 reason,
             );
@@ -1514,6 +1516,31 @@ impl CsvLog {
         // Flush every row so the file remains useful after interruption.
         self.writer.flush()?;
         Ok(())
+    }
+}
+
+fn decide_real_heater_state(
+    controller: &mut Controller,
+    box_air_temp_c: f32,
+    product_temp_c: Option<f32>,
+    previous_heater_on: bool,
+    updated_probe: TemperatureProbe,
+) -> (bool, &'static str) {
+    if box_air_temp_c >= BOX_AIR_HARD_CUTOFF_C {
+        return (false, "box_air_hard_cutoff");
+    }
+    if product_temp_c.is_some_and(|temp| temp >= PRODUCT_HARD_CUTOFF_C) {
+        return (false, "product_hard_cutoff");
+    }
+
+    match updated_probe {
+        TemperatureProbe::BoxAir => {
+            let heater_on = controller.update(box_air_temp_c);
+            let reason = control_reason(box_air_temp_c, heater_on, previous_heater_on);
+            (heater_on, reason)
+        }
+        TemperatureProbe::RoomAir => (previous_heater_on, "room_update"),
+        TemperatureProbe::Product => (previous_heater_on, "product_update"),
     }
 }
 
@@ -1637,6 +1664,10 @@ code {
       <div class="value" id="latest-temp">—</div>
     </div>
     <div class="card">
+      <div class="label">Product</div>
+      <div class="value" id="product-temp">—</div>
+    </div>
+    <div class="card">
       <div class="label">Room air</div>
       <div class="value" id="room-temp">—</div>
     </div>
@@ -1679,6 +1710,7 @@ let source = null;
 const ids = {
   roomTemp: document.getElementById("room-temp"),
   latestTemp: document.getElementById("latest-temp"),
+  productTemp: document.getElementById("product-temp"),
   heater: document.getElementById("heater"),
   elapsed: document.getElementById("elapsed"),
   sampleCount: document.getElementById("sample-count"),
@@ -1766,6 +1798,9 @@ function render() {
   }
 
   ids.latestTemp.textContent = `${latest.box_air_temp_c.toFixed(2)} °C`;
+  ids.productTemp.textContent =
+    latest.product_temp_c === null || latest.product_temp_c === undefined
+      ? "—" : `${latest.product_temp_c.toFixed(2)} °C`;
   ids.roomTemp.textContent =
     latest.room_air_temp_c === null || latest.room_air_temp_c === undefined
       ? "—" : `${latest.room_air_temp_c.toFixed(2)} °C`;
@@ -1781,8 +1816,16 @@ function render() {
   const visible = samples.slice(-900);
   const tMin = visible[0].time_s;
   const tMax = Math.max(tMin + 1, visible[visible.length - 1].time_s);
-  let yMin = Math.min(...visible.map(s => s.box_air_temp_c));
-  let yMax = Math.max(...visible.map(s => s.box_air_temp_c));
+
+  const tempValues = visible.flatMap(sample => {
+    const values = [sample.box_air_temp_c];
+    if (sample.product_temp_c !== null && sample.product_temp_c !== undefined) {
+      values.push(sample.product_temp_c);
+    }
+    return values;
+  });
+  let yMin = Math.min(...tempValues);
+  let yMax = Math.max(...tempValues);
   if (Math.abs(yMax - yMin) < 0.5) {
     yMin -= 0.5;
     yMax += 0.5;
@@ -1827,22 +1870,44 @@ function render() {
     heaterBands += `<rect x="${x0.toFixed(1)}" y="${margin.top}" width="${Math.max(1, x1 - x0).toFixed(1)}" height="${plotH}" fill="var(--hot)" opacity="0.16"/>`;
   }
 
-  const path = visible.map((sample, index) => {
-    const command = index === 0 ? "M" : "L";
-    return `${command} ${x(sample.time_s).toFixed(2)} ${y(sample.box_air_temp_c).toFixed(2)}`;
-  }).join(" ");
+  function linePath(points, valueFn) {
+    const validPoints = points.filter(sample => {
+      const value = valueFn(sample);
+      return value !== null && value !== undefined;
+    });
+    return validPoints.map((sample, index) => {
+      const command = index === 0 ? "M" : "L";
+      return `${command} ${x(sample.time_s).toFixed(2)} ${y(valueFn(sample)).toFixed(2)}`;
+    }).join(" ");
+  }
+
+  const boxPath = linePath(visible, sample => sample.box_air_temp_c);
+  const productPath = linePath(visible, sample => sample.product_temp_c);
 
   const latestX = x(latest.time_s);
   const latestY = y(latest.box_air_temp_c);
+  const latestProductX = latest.product_temp_c === null || latest.product_temp_c === undefined
+    ? null : x(latest.time_s);
+  const latestProductY = latest.product_temp_c === null || latest.product_temp_c === undefined
+    ? null : y(latest.product_temp_c);
+  const latestProductMarker = latestProductX === null || latestProductY === null
+    ? ""
+    : `<circle cx="${latestProductX.toFixed(1)}" cy="${latestProductY.toFixed(1)}" r="4.5" fill="var(--hot)"/>`;
 
   ids.plot.innerHTML = `
     ${grid}
     ${heaterBands}
     <line x1="${margin.left}" y1="${margin.top + plotH}" x2="${width - margin.right}" y2="${margin.top + plotH}" stroke="currentColor" opacity="0.35"/>
-    <path d="${path}" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round"/>
+    <path d="${boxPath}" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round"/>
+    <path d="${productPath}" fill="none" stroke="var(--hot)" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
     <circle cx="${latestX.toFixed(1)}" cy="${latestY.toFixed(1)}" r="4.5" fill="currentColor"/>
+    ${latestProductMarker}
     <rect x="${margin.left}" y="${height - 48}" width="14" height="14" rx="4" fill="var(--hot)" opacity="0.35"/>
     <text x="${margin.left + 22}" y="${height - 36}" font-size="13" fill="currentColor">heater on</text>
+    <line x1="${margin.left + 118}" y1="${height - 41}" x2="${margin.left + 148}" y2="${height - 41}" stroke="currentColor" stroke-width="2.6"/>
+    <text x="${margin.left + 154}" y="${height - 36}" font-size="13" fill="currentColor">box air</text>
+    <line x1="${margin.left + 230}" y1="${height - 41}" x2="${margin.left + 260}" y2="${height - 41}" stroke="var(--hot)" stroke-width="2.4"/>
+    <text x="${margin.left + 266}" y="${height - 36}" font-size="13" fill="currentColor">product</text>
   `;
 }
 

@@ -26,7 +26,7 @@ Connect the box-air adapter to the ESP32:
 ```text
 box adapter VCC        -> ESP32 3V3
 box adapter GND / BLK  -> ESP32 GND
-box adapter DATA       -> ESP32 GPIO4
+box adapter DATA       -> ESP32 GPIO5
 ```
 
 Connect the room-air adapter to the ESP32:
@@ -34,7 +34,15 @@ Connect the room-air adapter to the ESP32:
 ```text
 room adapter VCC        -> ESP32 3V3
 room adapter GND / BLK  -> ESP32 GND
-room adapter DATA       -> ESP32 GPIO5
+room adapter DATA       -> ESP32 GPIO6
+```
+
+Connect the product adapter to the ESP32:
+
+```text
+product adapter VCC        -> ESP32 3V3
+product adapter GND / BLK  -> ESP32 GND
+product adapter DATA       -> ESP32 GPIO4
 ```
 
 Expected serial output from the ESP32:
@@ -42,6 +50,7 @@ Expected serial output from the ESP32:
 ```text
 temp,box_air,22.437
 temp,room_air,20.125
+temp,product,23.125
 ```
 
 Flash the ESP32 firmware:
@@ -50,11 +59,6 @@ Flash the ESP32 firmware:
 cd firmware/esp32-temperature-bridge
 ESPFLASH_PORT=/dev/cu.usbmodem1234561 cargo run --release
 ```
-
-Product-probe wiring will come later. For now, use:
-
-- `box_air` on GPIO4 for control
-- `room_air` on GPIO5 for ambient context
 
 ## Physical stack
 
@@ -68,9 +72,9 @@ Product-probe wiring will come later. For now, use:
 
 ## Probe naming
 
-- `box_air`: air temperature at rack/food height.
-- `room_air`: ambient room temperature outside the incubator.
-- `product`: not wired yet.
+- `box_air`: air temperature at rack/food height, GPIO5, used for normal heater control.
+- `room_air`: ambient room temperature outside the incubator, GPIO6, logged only.
+- `product`: bean mass / bag-adjacent temperature, GPIO4, used for safety cutoff.
 
 ## First test protocol
 

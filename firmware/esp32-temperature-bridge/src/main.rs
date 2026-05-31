@@ -9,8 +9,9 @@ use esp_idf_sys::{
 };
 use log::{info, warn};
 
-const BOX_AIR_GPIO: i32 = 4;
-const ROOM_AIR_GPIO: i32 = 5;
+const BOX_AIR_GPIO: i32 = 5;
+const ROOM_AIR_GPIO: i32 = 6;
+const PRODUCT_GPIO: i32 = 4;
 
 const DS18B20_SKIP_ROM: u8 = 0xCC;
 const DS18B20_CONVERT_T: u8 = 0x44;
@@ -21,20 +22,24 @@ fn main() -> Result<()> {
     EspLogger::initialize_default();
 
     let peripherals = Peripherals::take()?;
-    let _box_air_pin = peripherals.pins.gpio4;
-    let _room_air_pin = peripherals.pins.gpio5;
+    let _box_air_pin = peripherals.pins.gpio5;
+    let _room_air_pin = peripherals.pins.gpio6;
+    let _product_pin = peripherals.pins.gpio4;
 
     let mut box_air = Ds18b20::new(BOX_AIR_GPIO)?;
     let mut room_air = Ds18b20::new(ROOM_AIR_GPIO)?;
+    let mut product = Ds18b20::new(PRODUCT_GPIO)?;
 
     info!("Tempeh OS ESP32 temperature bridge");
     info!("box_air DATA -> GPIO{BOX_AIR_GPIO}");
     info!("room_air DATA -> GPIO{ROOM_AIR_GPIO}");
-    info!("reading two DS18B20 probes on separate 1-Wire buses");
+    info!("product DATA -> GPIO{PRODUCT_GPIO}");
+    info!("reading three DS18B20 probes on separate 1-Wire buses");
 
     loop {
         read_and_print("box_air", &mut box_air);
         read_and_print("room_air", &mut room_air);
+        read_and_print("product", &mut product);
 
         FreeRtos::delay_ms(2_000);
     }

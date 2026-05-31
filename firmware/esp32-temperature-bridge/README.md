@@ -9,13 +9,15 @@ Reads DS18B20 waterproof probes on separate GPIO pins and prints labelled temper
 ```text
 temp,box_air,22.437
 temp,room_air,20.125
+temp,product,23.125
 ```
 
 ## Pins
 
 ```text
-GPIO4 -> box_air DATA
-GPIO5 -> room_air DATA
+GPIO5 -> box_air DATA
+GPIO6 -> room_air DATA
+GPIO4 -> product DATA
 3V3   -> probe adapter VCC
 G     -> probe adapter GND / BLK
 ```
@@ -59,8 +61,8 @@ cargo run -- real-control-test /dev/cu.usbmodem1234561 http://192.168.8.193 out/
 Expected host output:
 
 ```text
-time_s,room_air_temp_c,box_air_temp_c,tempeh_core_temp_c
-1,20.125,22.437,
+time_s,room_air_temp_c,box_air_temp_c,product_temp_c
+1,20.125,22.437,23.125
 ```
 
-The empty `tempeh_core_temp_c` column is expected until the product probe is added.
+The product_temp_c column remains blank until the product probe has emitted at least one valid reading.

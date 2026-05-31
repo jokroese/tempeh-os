@@ -81,18 +81,19 @@ cd firmware/esp32-temperature-bridge
 ESPFLASH_PORT=/dev/cu.usbmodem1234561 cargo run --release
 ```
 
-The firmware currently reads two DS18B20 probes on separate pins:
+The firmware currently reads three DS18B20 probes on separate pins:
 
 ```
 temp,box_air,22.437
 temp,room_air,20.125
+temp,product,23.125
 ```
 
 ## Real control smoke test
 
 `real-control-test` reads the ESP32 temperature bridge and drives the Tasmota plug from the real box-air temperature.
 
-For this control test, `box_air` drives the heater decision. `room_air` is logged as ambient context. The product/core column remains blank until the product probe is added.
+For this control test, `box_air` drives the normal heater decision. `room_air` is logged as ambient context. `product` is logged and used as a hard safety cutoff when available.
 
 It writes the control log to stdout and to a CSV file:
 
@@ -137,6 +138,7 @@ Current ESP32 firmware output:
 ```
 temp,box_air,22.437
 temp,room_air,20.125
+temp,product,23.125
 ```
 
 Use stdin for parser testing:
@@ -156,8 +158,8 @@ cargo run -- thermometer-test /dev/cu.usbmodem1234561
 Expected CSV output:
 
 ```text
-time_s,room_air_temp_c,box_air_temp_c,tempeh_core_temp_c
-1,20.125,22.437,
+time_s,room_air_temp_c,box_air_temp_c,product_temp_c
+1,20.125,22.437,23.125
 ```
 
 ## Serial ports
@@ -170,7 +172,7 @@ cargo run -- ports
 
 The command prints USB metadata where available and marks ports that look like likely ESP32 devices.
 
-The command prints CSV snapshots with the latest known box-air and room-air temperatures. The product/core column is blank until the product probe is added.
+The command prints CSV snapshots with the latest known box-air, room-air, and product temperatures. The product column is blank until the product probe has emitted at least one valid reading.
 It does not control the heater.
 
 ## Pet mode

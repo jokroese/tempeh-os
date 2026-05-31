@@ -48,12 +48,12 @@ pub struct TemperatureReading {
     pub time_s: f32,
     pub room_air_temp_c: Option<f32>,
     pub box_air_temp_c: f32,
-    pub tempeh_core_temp_c: Option<f32>,
+    pub product_temp_c: Option<f32>,
 }
 
 impl TemperatureReading {
     pub fn csv_header() -> &'static str {
-        "time_s,room_air_temp_c,box_air_temp_c,tempeh_core_temp_c"
+        "time_s,room_air_temp_c,box_air_temp_c,product_temp_c"
     }
 
     pub fn csv_row(&self) -> String {
@@ -61,13 +61,13 @@ impl TemperatureReading {
             .room_air_temp_c
             .map(|temp| format!("{temp:.3}"))
             .unwrap_or_default();
-        let core = self
-            .tempeh_core_temp_c
+        let product = self
+            .product_temp_c
             .map(|temp| format!("{temp:.3}"))
             .unwrap_or_default();
         format!(
             "{:.0},{},{:.3},{}",
-            self.time_s, room, self.box_air_temp_c, core,
+            self.time_s, room, self.box_air_temp_c, product,
         )
     }
 }
@@ -120,28 +120,28 @@ mod tests {
     fn temperature_reading_writes_csv_header() {
         assert_eq!(
             TemperatureReading::csv_header(),
-            "time_s,room_air_temp_c,box_air_temp_c,tempeh_core_temp_c"
+            "time_s,room_air_temp_c,box_air_temp_c,product_temp_c"
         );
     }
 
     #[test]
-    fn temperature_reading_writes_csv_row_with_room_and_core() {
+    fn temperature_reading_writes_csv_row_with_room_and_product() {
         let reading = TemperatureReading {
             time_s: 2.0,
             room_air_temp_c: Some(20.2),
             box_air_temp_c: 22.4,
-            tempeh_core_temp_c: Some(23.1),
+            product_temp_c: Some(23.1),
         };
         assert_eq!(reading.csv_row(), "2,20.200,22.400,23.100");
     }
 
     #[test]
-    fn temperature_reading_writes_csv_row_without_core() {
+    fn temperature_reading_writes_csv_row_without_product() {
         let reading = TemperatureReading {
             time_s: 2.0,
             room_air_temp_c: None,
             box_air_temp_c: 22.4,
-            tempeh_core_temp_c: None,
+            product_temp_c: None,
         };
         assert_eq!(reading.csv_row(), "2,,22.400,");
     }

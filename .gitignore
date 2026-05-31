@@ -2,4 +2,7 @@
 
 /target
 /out
+
+.repomixignore
+repomix.config.json
 repomix-output.xml
