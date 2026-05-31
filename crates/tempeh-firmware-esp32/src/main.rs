@@ -9,13 +9,15 @@ use esp_idf_svc::log::EspLogger;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::wifi::{BlockingWifi, ClientConfiguration, Configuration, EspWifi};
 use esp_idf_sys::{
-    esp, esp_timer_get_time, gpio_config, gpio_config_t, gpio_get_level,
-    gpio_int_type_t_GPIO_INTR_DISABLE, gpio_mode_t_GPIO_MODE_INPUT_OUTPUT_OD, gpio_num_t,
-    gpio_pulldown_t_GPIO_PULLDOWN_DISABLE, gpio_pullup_t_GPIO_PULLUP_ENABLE, gpio_set_level,
+    esp, esp_get_free_heap_size, esp_get_minimum_free_heap_size, esp_timer_get_time, gpio_config,
+    gpio_config_t, gpio_get_level, gpio_int_type_t_GPIO_INTR_DISABLE,
+    gpio_mode_t_GPIO_MODE_INPUT_OUTPUT_OD, gpio_num_t, gpio_pulldown_t_GPIO_PULLDOWN_DISABLE,
+    gpio_pullup_t_GPIO_PULLUP_ENABLE, gpio_set_level, uxTaskGetStackHighWaterMark,
+    xTaskGetCurrentTaskHandle,
 };
 use log::{info, warn};
 use tempeh_model::TemperatureProbe;
-use tempeh_protocol::format_temperature_line;
+use tempeh_protocol::probe_name;
 use tempeh_runtime::{LatestTemperatureReadings, RealRunConfig, RealRunController, RealRunSample};
 
 const BOX_AIR_GPIO: i32 = 5;
@@ -56,7 +58,9 @@ impl ProbeConfig {
         };
 
         if !probes.box_air {
-            bail!("probe box_air must be enabled for control; set [probes].box_air = true in firmware.local.toml");
+            bail!(
+                "probe box_air must be enabled for control; set [probes].box_air = true in firmware.local.toml"
+            );
         }
 
         Ok(probes)
@@ -103,8 +107,6 @@ fn main() -> Result<()> {
     let mut latest = LatestTemperatureReadings::new();
     let mut controller = RealRunController::new(RealRunConfig::default());
     let start_us = now_us();
-    let safety_interval_s = RealRunConfig::default().max_box_air_age_s / 4.0;
-    let mut last_safety_tick_s = 0.0_f32;
 
     info!("Tempeh OS ESP32 temperature bridge");
     if probes.box_air {
@@ -127,8 +129,12 @@ fn main() -> Result<()> {
         "control output: control,time_s,room_air_temp_c,box_air_temp_c,product_temp_c,heater_on,reason"
     );
 
+    let mut last_diagnostics_s = 0.0_f32;
+    let mut last_safety_tick_s = 0.0_f32;
+
     loop {
         let time_s = elapsed_s(start_us);
+        maybe_log_runtime_diagnostics(time_s, &mut last_diagnostics_s, last_safety_tick_s);
         let mut emitted_control_this_sweep = false;
 
         if let Some(probe) = box_air.as_mut() {
@@ -162,11 +168,10 @@ fn main() -> Result<()> {
             )?;
         }
 
-        let safety_tick_due = time_s - last_safety_tick_s >= safety_interval_s;
-        if !emitted_control_this_sweep || safety_tick_due {
-            if run_safety_tick(&latest, &mut controller, &mut heater_output, start_us)? {
-                last_safety_tick_s = time_s;
-            }
+        if emitted_control_this_sweep {
+            last_safety_tick_s = time_s;
+        } else if run_safety_tick(&latest, &mut controller, &mut heater_output, start_us)? {
+            last_safety_tick_s = time_s;
         }
 
         FreeRtos::delay_ms(2_000);
@@ -348,7 +353,7 @@ fn read_update_and_print(
         Ok(temp_c) => {
             let time_s = elapsed_s(start_us);
 
-            println!("{}", format_temperature_line(probe_kind, temp_c));
+            println!("temp,{},{temp_c:.3}", probe_name(probe_kind));
 
             latest.update_at(time_s, probe_kind, temp_c);
 
@@ -398,9 +403,52 @@ fn apply_and_print_control_sample(
     heater_output: &mut TasmotaHeaterOutput,
 ) -> Result<()> {
     heater_output.apply_decision(sample.heater_on, sample.reason)?;
-
-    println!("control,{}", sample.csv_row());
+    print_control_sample(sample);
     Ok(())
+}
+
+fn print_control_sample(sample: RealRunSample) {
+    let heater_on = if sample.heater_on { 1 } else { 0 };
+    match (sample.room_air_temp_c, sample.product_temp_c) {
+        (Some(room_air), Some(product)) => println!(
+            "control,{:.0},{:.3},{:.3},{:.3},{},{}",
+            sample.time_s, room_air, sample.box_air_temp_c, product, heater_on, sample.reason
+        ),
+        (Some(room_air), None) => println!(
+            "control,{:.0},{:.3},{:.3},{},{},{}",
+            sample.time_s, room_air, sample.box_air_temp_c, "", heater_on, sample.reason
+        ),
+        (None, Some(product)) => println!(
+            "control,{:.0},{},{:.3},{:.3},{},{}",
+            sample.time_s, "", sample.box_air_temp_c, product, heater_on, sample.reason
+        ),
+        (None, None) => println!(
+            "control,{:.0},{},{:.3},{},{},{}",
+            sample.time_s, "", sample.box_air_temp_c, "", heater_on, sample.reason
+        ),
+    }
+}
+
+fn maybe_log_runtime_diagnostics(
+    time_s: f32,
+    last_diagnostics_s: &mut f32,
+    last_safety_tick_s: f32,
+) {
+    const DIAGNOSTICS_INTERVAL_S: f32 = 60.0;
+    if time_s - *last_diagnostics_s < DIAGNOSTICS_INTERVAL_S {
+        return;
+    }
+    *last_diagnostics_s = time_s;
+
+    unsafe {
+        let task = xTaskGetCurrentTaskHandle();
+        let stack_high_water_words = uxTaskGetStackHighWaterMark(task);
+        let free_heap = esp_get_free_heap_size();
+        let min_free_heap = esp_get_minimum_free_heap_size();
+        info!(
+            "runtime diagnostics: main_stack_high_water={stack_high_water_words} words, free_heap={free_heap} bytes, min_free_heap={min_free_heap} bytes, last_safety_tick_s={last_safety_tick_s:.0}"
+        );
+    }
 }
 
 fn now_us() -> i64 {

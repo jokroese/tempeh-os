@@ -98,4 +98,18 @@ time_s,room_air_temp_c,box_air_temp_c,product_temp_c
 
 The product_temp_c column remains blank until the product probe has emitted at least one valid reading.
 
-The firmware also runs a safety tick after each probe sweep when no probe emitted a control sample, and periodically on a watchdog interval so stale-reading safety can turn the heater off even if probe reads succeed without updating control.
+The firmware also runs a safety tick after each probe sweep when no probe emitted a control sample, so stale-reading safety can turn the heater off even if probe reads succeed without updating control. Successful probe-driven control samples reset the safety cadence, avoiding duplicate `control,...,safety_tick` rows during normal operation.
+
+## Firmware build checks
+
+ESP-IDF defaults are pinned in `sdkconfig.defaults`. The generated `sdkconfig`
+lives under `target/.../esp-idf-sys-*/out/sdkconfig`.
+
+```bash
+just firmware-rebuild
+just firmware-config-check
+```
+
+firmware-config-check fails if critical ESP-IDF settings regress, including
+USB Serial/JTAG as the primary console, the larger main task stack, custom
+partition table, and 4 MB flash image configuration.

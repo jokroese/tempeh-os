@@ -19,4 +19,8 @@ log.workspace = true
 embuild.workspace = true
 
 [package.metadata.esp-idf-sys]
-esp_idf_version = "v5.4.1"
+# esp-idf-sys 0.36 officially supports ESP-IDF up to v5.3.x. Paths are relative to the
+# workspace root (tempeh-os/), not this crate directory.
+esp_idf_version = "v5.3.3"
+esp_idf_sdkconfig = "crates/tempeh-firmware-esp32/sdkconfig"
+esp_idf_sdkconfig_defaults = ["crates/tempeh-firmware-esp32/sdkconfig.defaults"]

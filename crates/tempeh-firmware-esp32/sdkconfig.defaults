@@ -3,11 +3,24 @@ CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 
 # ESP32-S3 native USB serial/JTAG console.
 # This matches the /dev/cu.usbmodem... port on macOS when using the USB port.
+# Select USB Serial/JTAG as the primary app console so stdout/stderr/log output
+# appears in espflash monitor. Keep the secondary console disabled; Espressif
+# recommends this for USB Serial/JTAG console use.
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
-CONFIG_ESP_CONSOLE_UART_NONE=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 
 # Avoid surprises from old boot messages where possible.
 CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y
+
+# Rust + Wi-Fi + HTTP + formatted logging is too stack-heavy for the ESP-IDF
+# default main task stack. Keep this comfortably large while firmware is still
+# evolving; optimise later if RAM becomes tight.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=65536
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=8192
+
+# Stack overflow detection: canary bytes on context switch + end-of-stack watchpoint.
+CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY=y
+CONFIG_FREERTOS_WATCHPOINT_END_OF_STACK=y
 
 # Wi-Fi + HTTP makes the firmware larger than the default 1 MiB factory app.
 # Use an explicit partition table with a larger app slot.

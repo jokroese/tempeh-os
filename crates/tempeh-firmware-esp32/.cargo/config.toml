@@ -10,3 +10,8 @@ build-std = ["std", "panic_abort"]
 
 [env]
 MCU = "esp32s3"
+# Virtual workspace: esp-idf-sys reads build config from the root crate, not member crates.
+ESP_IDF_SYS_ROOT_CRATE = "tempeh-firmware-esp32"
+# Copy partition table into the esp-idf-sys cmake out dir (paths relative to this crate).
+ESP_IDF_GLOB_PARTITION_BASE = { value = ".", relative = true }
+ESP_IDF_GLOB_PARTITION_FILES = "partitions.csv"
