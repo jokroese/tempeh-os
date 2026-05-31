@@ -9,6 +9,16 @@ CONFIG_ESP_CONSOLE_UART_NONE=y
 # Avoid surprises from old boot messages where possible.
 CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y
 
+# Wi-Fi + HTTP makes the firmware larger than the default 1 MiB factory app.
+# Use an explicit partition table with a larger app slot.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# The current ESP32-S3 board boots with a 4 MB SPI flash configuration.
+# Keep the partition table and bootloader in agreement.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
+
 # Wi-Fi station mode for the future Tasmota actuator path.
 CONFIG_ESP_WIFI_ENABLED=y
 CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=10
