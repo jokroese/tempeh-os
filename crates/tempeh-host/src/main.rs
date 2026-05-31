@@ -20,9 +20,9 @@ use tempeh_control::{
     ControlLoop, ControlReading, Controller, Heater, HeaterError, TraceThermometer,
     parse_temperature_line, run_trace_control,
 };
-use tempeh_model::{EnvironmentState, TemperatureProbe, TemperatureReading};
+use tempeh_model::{EnvironmentState, TemperatureReading};
 use tempeh_pet::{PetEvent, PetReport, format_event_time, report_for_samples};
-use tempeh_runtime::{ProbeSnapshot, RealRunConfig, RealRunController};
+use tempeh_runtime::{LatestTemperatureReadings, RealRunConfig, RealRunController};
 use tempeh_sim::{SimConfig, Simulator, TemperatureTrace};
 use tokio::sync::broadcast;
 
@@ -950,40 +950,6 @@ fn run_trace_control_test_steps(
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy)]
-struct LatestTemperatureReadings {
-    room_air_temp_c: Option<f32>,
-    box_air_temp_c: Option<f32>,
-    product_temp_c: Option<f32>,
-}
-
-impl LatestTemperatureReadings {
-    fn new() -> Self {
-        Self {
-            room_air_temp_c: None,
-            box_air_temp_c: None,
-            product_temp_c: None,
-        }
-    }
-
-    fn update(&mut self, probe: TemperatureProbe, temp_c: f32) {
-        match probe {
-            TemperatureProbe::RoomAir => self.room_air_temp_c = Some(temp_c),
-            TemperatureProbe::BoxAir => self.box_air_temp_c = Some(temp_c),
-            TemperatureProbe::Product => self.product_temp_c = Some(temp_c),
-        }
-    }
-
-    fn reading(&self, time_s: f32) -> Option<TemperatureReading> {
-        Some(TemperatureReading {
-            time_s,
-            room_air_temp_c: self.room_air_temp_c,
-            box_air_temp_c: self.box_air_temp_c?,
-            product_temp_c: self.product_temp_c,
-        })
-    }
-}
-
 #[derive(Debug, Clone, Serialize)]
 struct LiveSample {
     seq: u64,
@@ -1489,12 +1455,10 @@ where
         };
         let time_s = start.elapsed().as_secs_f32();
         let product_temp_c = latest.product_temp_c;
-        let decision = controller.update(ProbeSnapshot {
-            box_air_temp_c,
-            room_air_temp_c: latest.room_air_temp_c,
-            product_temp_c,
-            updated_probe: parsed.probe,
-        });
+        let Some(snapshot) = latest.snapshot_for_update(parsed.probe) else {
+            continue;
+        };
+        let decision = controller.update(snapshot);
         let heater_on = decision.heater_on;
         let reason = decision.reason;
 

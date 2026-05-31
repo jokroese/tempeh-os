@@ -1,5 +1,5 @@
 use tempeh_control::Controller;
-use tempeh_model::{ControllerConfig, TemperatureProbe};
+use tempeh_model::{ControllerConfig, TemperatureProbe, TemperatureReading};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RealRunConfig {
@@ -15,6 +15,55 @@ impl Default for RealRunConfig {
             box_air_hard_cutoff_c: 34.0,
             product_hard_cutoff_c: 34.0,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LatestTemperatureReadings {
+    pub room_air_temp_c: Option<f32>,
+    pub box_air_temp_c: Option<f32>,
+    pub product_temp_c: Option<f32>,
+}
+
+impl LatestTemperatureReadings {
+    pub fn new() -> Self {
+        Self {
+            room_air_temp_c: None,
+            box_air_temp_c: None,
+            product_temp_c: None,
+        }
+    }
+
+    pub fn update(&mut self, probe: TemperatureProbe, temp_c: f32) {
+        match probe {
+            TemperatureProbe::RoomAir => self.room_air_temp_c = Some(temp_c),
+            TemperatureProbe::BoxAir => self.box_air_temp_c = Some(temp_c),
+            TemperatureProbe::Product => self.product_temp_c = Some(temp_c),
+        }
+    }
+
+    pub fn reading(&self, time_s: f32) -> Option<TemperatureReading> {
+        Some(TemperatureReading {
+            time_s,
+            room_air_temp_c: self.room_air_temp_c,
+            box_air_temp_c: self.box_air_temp_c?,
+            product_temp_c: self.product_temp_c,
+        })
+    }
+
+    pub fn snapshot_for_update(&self, updated_probe: TemperatureProbe) -> Option<ProbeSnapshot> {
+        Some(ProbeSnapshot {
+            box_air_temp_c: self.box_air_temp_c?,
+            room_air_temp_c: self.room_air_temp_c,
+            product_temp_c: self.product_temp_c,
+            updated_probe,
+        })
+    }
+}
+
+impl Default for LatestTemperatureReadings {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -106,6 +155,70 @@ fn control_reason(heater_on: bool, previous_heater_on: bool) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn latest_temperature_readings_start_empty() {
+        let latest = LatestTemperatureReadings::new();
+
+        assert_eq!(latest.room_air_temp_c, None);
+        assert_eq!(latest.box_air_temp_c, None);
+        assert_eq!(latest.product_temp_c, None);
+        assert_eq!(latest.reading(0.0), None);
+        assert_eq!(latest.snapshot_for_update(TemperatureProbe::BoxAir), None);
+    }
+
+    #[test]
+    fn latest_temperature_readings_update_by_probe() {
+        let mut latest = LatestTemperatureReadings::new();
+
+        latest.update(TemperatureProbe::RoomAir, 20.2);
+        latest.update(TemperatureProbe::BoxAir, 22.4);
+        latest.update(TemperatureProbe::Product, 23.1);
+
+        assert_eq!(latest.room_air_temp_c, Some(20.2));
+        assert_eq!(latest.box_air_temp_c, Some(22.4));
+        assert_eq!(latest.product_temp_c, Some(23.1));
+    }
+
+    #[test]
+    fn latest_temperature_readings_emit_model_reading_once_box_air_exists() {
+        let mut latest = LatestTemperatureReadings::new();
+
+        latest.update(TemperatureProbe::RoomAir, 20.2);
+        assert_eq!(latest.reading(1.0), None);
+
+        latest.update(TemperatureProbe::BoxAir, 22.4);
+
+        assert_eq!(
+            latest.reading(2.0),
+            Some(TemperatureReading {
+                time_s: 2.0,
+                room_air_temp_c: Some(20.2),
+                box_air_temp_c: 22.4,
+                product_temp_c: None,
+            })
+        );
+    }
+
+    #[test]
+    fn latest_temperature_readings_emit_probe_snapshot_once_box_air_exists() {
+        let mut latest = LatestTemperatureReadings::new();
+
+        latest.update(TemperatureProbe::Product, 23.1);
+        assert_eq!(latest.snapshot_for_update(TemperatureProbe::Product), None);
+
+        latest.update(TemperatureProbe::BoxAir, 22.4);
+
+        assert_eq!(
+            latest.snapshot_for_update(TemperatureProbe::Product),
+            Some(ProbeSnapshot {
+                box_air_temp_c: 22.4,
+                room_air_temp_c: None,
+                product_temp_c: Some(23.1),
+                updated_probe: TemperatureProbe::Product,
+            })
+        );
+    }
 
     #[test]
     fn turns_heater_on_when_box_air_is_below_target_band() {
