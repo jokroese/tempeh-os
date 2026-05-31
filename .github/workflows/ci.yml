@@ -1,0 +1,21 @@
+name: CI
+on:
+  push:
+  pull_request:
+jobs:
+  host:
+    name: Host workspace checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep
+          cargo install just --locked
+      - name: Run checks
+        run: just check
