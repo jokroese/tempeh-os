@@ -8,11 +8,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use tempeh_control::{
-    ControlReading, Controller, Heater, parse_temperature_line, run_trace_control,
-};
+use tempeh_control::{ControlReading, Controller, Heater, run_trace_control};
 use tempeh_model::{EnvironmentState, TemperatureReading};
 use tempeh_pet::{PetEvent, PetReport, format_event_time, report_for_samples};
+use tempeh_protocol::parse_temperature_line;
 use tempeh_runtime::{LatestTemperatureReadings, RealRunConfig, RealRunController, RealRunSample};
 use tempeh_sim::{SimConfig, Simulator, TemperatureTrace};
 

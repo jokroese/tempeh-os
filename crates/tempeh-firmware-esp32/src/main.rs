@@ -9,6 +9,7 @@ use esp_idf_sys::{
 };
 use log::{info, warn};
 use tempeh_model::TemperatureProbe;
+use tempeh_protocol::format_temperature_line;
 use tempeh_runtime::{LatestTemperatureReadings, RealRunConfig, RealRunController};
 
 const BOX_AIR_GPIO: i32 = 5;
@@ -41,9 +42,9 @@ fn main() -> Result<()> {
     info!("reading three DS18B20 probes on separate 1-Wire buses");
 
     loop {
-        read_and_print("box_air", &mut box_air);
-        read_and_print("room_air", &mut room_air);
-        read_and_print("product", &mut product);
+        read_and_print(TemperatureProbe::BoxAir, &mut box_air);
+        read_and_print(TemperatureProbe::RoomAir, &mut room_air);
+        read_and_print(TemperatureProbe::Product, &mut product);
 
         FreeRtos::delay_ms(2_000);
     }
@@ -69,13 +70,13 @@ fn log_runtime_policy_smoke_check() {
     );
 }
 
-fn read_and_print(label: &str, probe: &mut Ds18b20) {
+fn read_and_print(probe_kind: TemperatureProbe, probe: &mut Ds18b20) {
     match probe.read_temperature_c() {
         Ok(temp_c) => {
-            println!("temp,{label},{temp_c:.3}");
+            println!("{}", format_temperature_line(probe_kind, temp_c));
         }
         Err(error) => {
-            warn!("{label} read failed: {error:#}");
+            warn!("{probe_kind:?} read failed: {error:#}");
         }
     }
 }

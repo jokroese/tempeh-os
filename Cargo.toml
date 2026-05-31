@@ -6,6 +6,7 @@ members = [
     "crates/tempeh-sim",
     "crates/tempeh-pet",
     "crates/tempeh-runtime",
+    "crates/tempeh-protocol",
     "crates/tempeh-host",
     "crates/tempeh-firmware-esp32",
 ]
@@ -15,6 +16,7 @@ default-members = [
     "crates/tempeh-sim",
     "crates/tempeh-pet",
     "crates/tempeh-runtime",
+    "crates/tempeh-protocol",
     "crates/tempeh-host",
 ]
 
@@ -28,6 +30,7 @@ tempeh-control = { path = "crates/tempeh-control" }
 tempeh-sim = { path = "crates/tempeh-sim" }
 tempeh-pet = { path = "crates/tempeh-pet" }
 tempeh-runtime = { path = "crates/tempeh-runtime" }
+tempeh-protocol = { path = "crates/tempeh-protocol" }
 serialport = "4"
 ctrlc = "3"
 chrono = "0.4"

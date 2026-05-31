@@ -2009,6 +2009,7 @@ dependencies = [
  "esp-idf-sys",
  "log",
  "tempeh-model",
+ "tempeh-protocol",
  "tempeh-runtime",
 ]
 
@@ -2027,6 +2028,7 @@ dependencies = [
  "tempeh-control",
  "tempeh-model",
  "tempeh-pet",
+ "tempeh-protocol",
  "tempeh-runtime",
  "tempeh-sim",
  "tokio",
@@ -2039,6 +2041,13 @@ version = "0.1.0"
 
 [[package]]
 name = "tempeh-pet"
+version = "0.1.0"
+dependencies = [
+ "tempeh-model",
+]
+
+[[package]]
+name = "tempeh-protocol"
 version = "0.1.0"
 dependencies = [
  "tempeh-model",

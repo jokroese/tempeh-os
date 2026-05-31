@@ -12,6 +12,7 @@ The physical prototype is documented in `docs/hardware/`. Hardware v0 is a proto
 - `tempeh-control` owns the decisions.
 - `tempeh-sim` owns the imaginary physics.
 - `tempeh-runtime` owns real-run safety and heater decision policy.
+- `tempeh-protocol` owns shared text protocols such as `temp,<probe>,<°C>` lines.
 - `tempeh-pet` owns the mycelial status report.
 - `tempeh-host` owns the laptop-side CLI, serial reader, CSV logging, Tasmota HTTP control, and live UI.
 - `tempeh-firmware-esp32` owns ESP32 probe firmware.

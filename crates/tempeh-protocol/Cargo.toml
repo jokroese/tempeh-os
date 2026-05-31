@@ -1,0 +1,7 @@
+[package]
+name = "tempeh-protocol"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tempeh-model.workspace = true

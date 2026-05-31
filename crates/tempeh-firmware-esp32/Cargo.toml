@@ -7,6 +7,7 @@ resolver = "2"
 [dependencies]
 tempeh-model.workspace = true
 tempeh-runtime.workspace = true
+tempeh-protocol.workspace = true
 anyhow.workspace = true
 esp-idf-hal.workspace = true
 esp-idf-svc.workspace = true
