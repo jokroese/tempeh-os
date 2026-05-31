@@ -28,15 +28,57 @@ const DS18B20_READ_SCRATCHPAD: u8 = 0xBE;
 const WIFI_SSID: Option<&str> = option_env!("TEMPEH_WIFI_SSID");
 const WIFI_PASSWORD: Option<&str> = option_env!("TEMPEH_WIFI_PASSWORD");
 const TASMOTA_BASE_URL: Option<&str> = option_env!("TEMPEH_TASMOTA_BASE_URL");
+const PROBE_BOX_AIR: Option<&str> = option_env!("TEMPEH_PROBE_BOX_AIR");
+const PROBE_ROOM_AIR: Option<&str> = option_env!("TEMPEH_PROBE_ROOM_AIR");
+const PROBE_PRODUCT: Option<&str> = option_env!("TEMPEH_PROBE_PRODUCT");
+
+#[derive(Debug, Clone, Copy)]
+struct ProbeConfig {
+    box_air: bool,
+    room_air: bool,
+    product: bool,
+}
+
+fn parse_probe_bool(value: Option<&str>, default: bool) -> bool {
+    match value {
+        Some("true") => true,
+        Some("false") => false,
+        _ => default,
+    }
+}
+
+impl ProbeConfig {
+    fn from_build_config() -> Result<Self> {
+        let probes = Self {
+            box_air: parse_probe_bool(PROBE_BOX_AIR, true),
+            room_air: parse_probe_bool(PROBE_ROOM_AIR, false),
+            product: parse_probe_bool(PROBE_PRODUCT, true),
+        };
+
+        if !probes.box_air {
+            bail!("probe box_air must be enabled for control; set [probes].box_air = true in firmware.local.toml");
+        }
+
+        Ok(probes)
+    }
+}
 
 fn main() -> Result<()> {
     esp_idf_svc::sys::link_patches();
     EspLogger::initialize_default();
 
     let peripherals = Peripherals::take()?;
-    let _box_air_pin = peripherals.pins.gpio5;
-    let _room_air_pin = peripherals.pins.gpio6;
-    let _product_pin = peripherals.pins.gpio4;
+    let probes = ProbeConfig::from_build_config()?;
+
+    if probes.box_air {
+        let _box_air_pin = peripherals.pins.gpio5;
+    }
+    if probes.room_air {
+        let _room_air_pin = peripherals.pins.gpio6;
+    }
+    if probes.product {
+        let _product_pin = peripherals.pins.gpio4;
+    }
     let modem = peripherals.modem;
 
     let _wifi = connect_wifi(modem)?;
@@ -45,19 +87,39 @@ fn main() -> Result<()> {
     // Start from a known safe state before reading probes or running policy.
     heater_output.set_heater(false, "boot_safe_off")?;
 
-    let mut box_air = Ds18b20::new(BOX_AIR_GPIO)?;
-    let mut room_air = Ds18b20::new(ROOM_AIR_GPIO)?;
-    let mut product = Ds18b20::new(PRODUCT_GPIO)?;
+    let mut box_air = probes
+        .box_air
+        .then(|| Ds18b20::new(BOX_AIR_GPIO))
+        .transpose()?;
+    let mut room_air = probes
+        .room_air
+        .then(|| Ds18b20::new(ROOM_AIR_GPIO))
+        .transpose()?;
+    let mut product = probes
+        .product
+        .then(|| Ds18b20::new(PRODUCT_GPIO))
+        .transpose()?;
 
     let mut latest = LatestTemperatureReadings::new();
     let mut controller = RealRunController::new(RealRunConfig::default());
     let start_us = now_us();
+    let safety_interval_s = RealRunConfig::default().max_box_air_age_s / 4.0;
+    let mut last_safety_tick_s = 0.0_f32;
 
     info!("Tempeh OS ESP32 temperature bridge");
-    info!("box_air DATA -> GPIO{BOX_AIR_GPIO}");
-    info!("room_air DATA -> GPIO{ROOM_AIR_GPIO}");
-    info!("product DATA -> GPIO{PRODUCT_GPIO}");
-    info!("reading three DS18B20 probes on separate 1-Wire buses");
+    if probes.box_air {
+        info!("box_air DATA -> GPIO{BOX_AIR_GPIO}");
+    }
+    if probes.room_air {
+        info!("room_air DATA -> GPIO{ROOM_AIR_GPIO}");
+    }
+    if probes.product {
+        info!("product DATA -> GPIO{PRODUCT_GPIO}");
+    }
+    info!(
+        "enabled probes: box_air={}, room_air={}, product={}",
+        probes.box_air, probes.room_air, probes.product
+    );
     info!("running shared real-run policy on device");
     info!("heater output: Tasmota HTTP; runtime decisions actuate the plug");
     info!("actuator mode: send command only when desired heater state changes");
@@ -66,32 +128,46 @@ fn main() -> Result<()> {
     );
 
     loop {
-        read_update_and_print(
-            TemperatureProbe::BoxAir,
-            &mut box_air,
-            &mut latest,
-            &mut controller,
-            &mut heater_output,
-            start_us,
-        )?;
-        read_update_and_print(
-            TemperatureProbe::RoomAir,
-            &mut room_air,
-            &mut latest,
-            &mut controller,
-            &mut heater_output,
-            start_us,
-        )?;
-        read_update_and_print(
-            TemperatureProbe::Product,
-            &mut product,
-            &mut latest,
-            &mut controller,
-            &mut heater_output,
-            start_us,
-        )?;
+        let time_s = elapsed_s(start_us);
+        let mut emitted_control_this_sweep = false;
 
-        run_safety_tick(&latest, &mut controller, &mut heater_output, start_us)?;
+        if let Some(probe) = box_air.as_mut() {
+            emitted_control_this_sweep |= read_update_and_print(
+                TemperatureProbe::BoxAir,
+                probe,
+                &mut latest,
+                &mut controller,
+                &mut heater_output,
+                start_us,
+            )?;
+        }
+        if let Some(probe) = room_air.as_mut() {
+            emitted_control_this_sweep |= read_update_and_print(
+                TemperatureProbe::RoomAir,
+                probe,
+                &mut latest,
+                &mut controller,
+                &mut heater_output,
+                start_us,
+            )?;
+        }
+        if let Some(probe) = product.as_mut() {
+            emitted_control_this_sweep |= read_update_and_print(
+                TemperatureProbe::Product,
+                probe,
+                &mut latest,
+                &mut controller,
+                &mut heater_output,
+                start_us,
+            )?;
+        }
+
+        let safety_tick_due = time_s - last_safety_tick_s >= safety_interval_s;
+        if !emitted_control_this_sweep || safety_tick_due {
+            if run_safety_tick(&latest, &mut controller, &mut heater_output, start_us)? {
+                last_safety_tick_s = time_s;
+            }
+        }
 
         FreeRtos::delay_ms(2_000);
     }
@@ -170,7 +246,7 @@ impl TasmotaHeaterOutput {
 
     fn new(base_url: impl Into<String>) -> Self {
         Self {
-            base_url: normalise_base_url(base_url.into()),
+            base_url: normalise_tasmota_base_url(base_url.into()),
             heater_on: false,
         }
     }
@@ -187,6 +263,7 @@ impl TasmotaHeaterOutput {
         let command_label = if on { "on" } else { "off" };
 
         info!("sending Tasmota heater {command_label} command: reason={reason}");
+        info!("Tasmota command URL: {url}");
 
         let connection = EspHttpConnection::new(&HttpConfiguration::default())
             .context("failed to create ESP HTTP connection")?;
@@ -243,8 +320,14 @@ impl TasmotaHeaterOutput {
     }
 }
 
-fn normalise_base_url(mut base_url: String) -> String {
-    base_url = base_url.trim().trim_end_matches('/').to_string();
+fn normalise_tasmota_base_url(mut base_url: String) -> String {
+    base_url = base_url.trim().to_string();
+
+    if let Some((before_query, _query)) = base_url.split_once('?') {
+        base_url = before_query.to_string();
+    }
+
+    base_url = base_url.trim_end_matches('/').to_string();
 
     if base_url.starts_with("http://") || base_url.starts_with("https://") {
         base_url
@@ -260,7 +343,7 @@ fn read_update_and_print(
     controller: &mut RealRunController,
     heater_output: &mut TasmotaHeaterOutput,
     start_us: i64,
-) -> Result<()> {
+) -> Result<bool> {
     match probe.read_temperature_c() {
         Ok(temp_c) => {
             let time_s = elapsed_s(start_us);
@@ -269,14 +352,14 @@ fn read_update_and_print(
 
             latest.update_at(time_s, probe_kind, temp_c);
 
-            emit_control_sample(time_s, probe_kind, latest, controller, heater_output)?;
+            return emit_control_sample(time_s, probe_kind, latest, controller, heater_output);
         }
         Err(error) => {
             warn!("{probe_kind:?} read failed: {error:#}");
         }
     }
 
-    Ok(())
+    Ok(false)
 }
 
 fn run_safety_tick(
@@ -284,14 +367,15 @@ fn run_safety_tick(
     controller: &mut RealRunController,
     heater_output: &mut TasmotaHeaterOutput,
     start_us: i64,
-) -> Result<()> {
+) -> Result<bool> {
     let time_s = elapsed_s(start_us);
 
     if let Some(sample) = controller.tick_sample(time_s, latest) {
         apply_and_print_control_sample(sample, heater_output)?;
+        return Ok(true);
     }
 
-    Ok(())
+    Ok(false)
 }
 
 fn emit_control_sample(
@@ -300,12 +384,13 @@ fn emit_control_sample(
     latest: &LatestTemperatureReadings,
     controller: &mut RealRunController,
     heater_output: &mut TasmotaHeaterOutput,
-) -> Result<()> {
+) -> Result<bool> {
     if let Some(sample) = controller.update_sample(time_s, latest, updated_probe) {
         apply_and_print_control_sample(sample, heater_output)?;
+        return Ok(true);
     }
 
-    Ok(())
+    Ok(false)
 }
 
 fn apply_and_print_control_sample(
@@ -498,5 +583,17 @@ mod tests {
     fn crc8_matches_ds18b20_scratchpad_example() {
         let scratchpad = [0x50, 0x05, 0x4B, 0x46, 0x7F, 0xFF, 0x0C, 0x10, 0x1C];
         assert_eq!(crc8(&scratchpad[..8]), scratchpad[8]);
+    }
+
+    #[test]
+    fn normalise_tasmota_base_url_trims_and_adds_scheme() {
+        assert_eq!(
+            normalise_tasmota_base_url("192.168.8.193".into()),
+            "http://192.168.8.193"
+        );
+        assert_eq!(
+            normalise_tasmota_base_url("http://192.168.8.193/".into()),
+            "http://192.168.8.193"
+        );
     }
 }

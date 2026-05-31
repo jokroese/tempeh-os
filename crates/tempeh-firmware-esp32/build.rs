@@ -20,6 +20,19 @@ fn main() {
                 tasmota.base_url
             );
         }
+
+        println!(
+            "cargo:rustc-env=TEMPEH_PROBE_BOX_AIR={}",
+            config.probes.box_air
+        );
+        println!(
+            "cargo:rustc-env=TEMPEH_PROBE_ROOM_AIR={}",
+            config.probes.room_air
+        );
+        println!(
+            "cargo:rustc-env=TEMPEH_PROBE_PRODUCT={}",
+            config.probes.product
+        );
     }
 }
 
@@ -27,6 +40,24 @@ fn main() {
 struct LocalFirmwareConfig {
     wifi: WifiConfig,
     tasmota: Option<TasmotaConfig>,
+    probes: ProbeConfig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ProbeConfig {
+    box_air: bool,
+    room_air: bool,
+    product: bool,
+}
+
+impl Default for ProbeConfig {
+    fn default() -> Self {
+        Self {
+            box_air: true,
+            room_air: false,
+            product: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -49,8 +80,31 @@ impl LocalFirmwareConfig {
                 password: read_toml_string(&text, "password")?,
             },
             tasmota: read_toml_string(&text, "base_url").map(|base_url| TasmotaConfig { base_url }),
+            probes: ProbeConfig {
+                box_air: read_toml_bool(&text, "box_air", true),
+                room_air: read_toml_bool(&text, "room_air", false),
+                product: read_toml_bool(&text, "product", true),
+            },
         })
     }
+}
+
+fn read_toml_bool(text: &str, key: &str, default: bool) -> bool {
+    let prefix = format!("{key} =");
+
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter(|line| !line.starts_with('#'))
+        .find_map(|line| {
+            let value = line.strip_prefix(&prefix)?.trim();
+            Some(match value {
+                "true" => true,
+                "false" => false,
+                _ => default,
+            })
+        })
+        .unwrap_or(default)
 }
 
 fn read_toml_string(text: &str, key: &str) -> Option<String> {
@@ -81,6 +135,19 @@ mod tests {
 
         assert_eq!(read_toml_string(text, "ssid"), Some("tempeh-net".into()));
         assert_eq!(read_toml_string(text, "password"), Some("secret".into()));
+    }
+
+    #[test]
+    fn reads_toml_bool_with_default() {
+        let text = r#"
+            [probes]
+            box_air = true
+            room_air = false
+        "#;
+
+        assert!(read_toml_bool(text, "box_air", false));
+        assert!(!read_toml_bool(text, "room_air", true));
+        assert!(read_toml_bool(text, "product", true));
     }
 
     #[test]

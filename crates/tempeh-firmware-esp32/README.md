@@ -59,20 +59,7 @@ The firmware connects to Wi-Fi on boot. Create a local firmware config file:
 cp firmware.local.example.toml firmware.local.toml
 ```
 
-Then edit:
-
-```toml
-[wifi]
-ssid = "your-wifi-name"
-password = "your-wifi-password"
-
-[tasmota]
-base_url = "http://192.0.2.10"
-```
-
-`firmware.local.toml` is ignored by Git. Do not commit real Wi-Fi credentials.
-
-Then flash from this directory:
+Edit it with your details, then flash from this directory:
 
 ```bash
 ESPFLASH_PORT=/dev/cu.usbmodem1234561 cargo run --release
@@ -111,4 +98,4 @@ time_s,room_air_temp_c,box_air_temp_c,product_temp_c
 
 The product_temp_c column remains blank until the product probe has emitted at least one valid reading.
 
-The firmware also runs a periodic safety tick after every probe sweep. This lets stale-reading safety turn the heater off even if no new probe reading successfully updates the control policy.
+The firmware also runs a safety tick after each probe sweep when no probe emitted a control sample, and periodically on a watchdog interval so stale-reading safety can turn the heater off even if probe reads succeed without updating control.
