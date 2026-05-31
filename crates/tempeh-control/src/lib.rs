@@ -217,57 +217,6 @@ impl Heater for LoggingHeater {
 }
 
 #[derive(Debug, Clone)]
-pub struct TasmotaHeater {
-    base_url: String,
-    heater_on: bool,
-}
-
-impl TasmotaHeater {
-    pub fn new(base_url: impl Into<String>) -> Self {
-        Self {
-            base_url: normalise_base_url(base_url.into()),
-            heater_on: false,
-        }
-    }
-
-    pub fn base_url(&self) -> &str {
-        &self.base_url
-    }
-
-    fn command_url(&self, on: bool) -> String {
-        let command = if on { "Power%20On" } else { "Power%20Off" };
-        format!("{}/cm?cmnd={command}", self.base_url)
-    }
-}
-
-impl Heater for TasmotaHeater {
-    fn set_heater(&mut self, on: bool) -> Result<(), HeaterError> {
-        let url = self.command_url(on);
-
-        ureq::get(&url)
-            .call()
-            .map_err(|_| HeaterError::CommandFailed)?;
-
-        self.heater_on = on;
-        Ok(())
-    }
-
-    fn heater_on(&self) -> bool {
-        self.heater_on
-    }
-}
-
-fn normalise_base_url(mut base_url: String) -> String {
-    base_url = base_url.trim().trim_end_matches('/').to_string();
-
-    if base_url.starts_with("http://") || base_url.starts_with("https://") {
-        base_url
-    } else {
-        format!("http://{base_url}")
-    }
-}
-
-#[derive(Debug, Clone)]
 pub struct ControlRun {
     pub readings: Vec<ControlReading>,
     pub heater_commands: Vec<bool>,
@@ -379,18 +328,6 @@ mod tests {
 
         assert!(!heater.heater_on());
         assert_eq!(heater.commands(), &[true, false]);
-    }
-
-    #[test]
-    fn tasmota_heater_normalises_base_url() {
-        let heater = TasmotaHeater::new("192.168.1.50/");
-        assert_eq!(heater.base_url(), "http://192.168.1.50");
-    }
-
-    #[test]
-    fn tasmota_heater_preserves_explicit_scheme() {
-        let heater = TasmotaHeater::new("https://plug.local/");
-        assert_eq!(heater.base_url(), "https://plug.local");
     }
 
     #[test]

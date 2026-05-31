@@ -18,3 +18,4 @@ serde.workspace = true
 serde_json.workspace = true
 async-stream.workspace = true
 futures-util.workspace = true
+ureq.workspace = true

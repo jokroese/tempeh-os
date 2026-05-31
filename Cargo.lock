@@ -1996,7 +1996,6 @@ version = "0.1.0"
 dependencies = [
  "tempeh-model",
  "tempeh-sim",
- "ureq",
 ]
 
 [[package]]
@@ -2029,6 +2028,7 @@ dependencies = [
  "tempeh-runtime",
  "tempeh-sim",
  "tokio",
+ "ureq",
 ]
 
 [[package]]
