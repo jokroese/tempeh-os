@@ -7,6 +7,8 @@ test:
     cargo test
 host *args:
     cargo run -p tempeh-host -- {{args}}
+monitor port *args:
+    cargo run -p tempeh-host -- monitor {{port}} {{args}}
 help:
     cargo run -p tempeh-host -- help
 smoke-stdin:

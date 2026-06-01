@@ -24,7 +24,7 @@ struct LiveSample {
     box_air_temp_c: f32,
     product_temp_c: Option<f32>,
     heater_on: bool,
-    reason: &'static str,
+    reason: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -59,8 +59,9 @@ impl LiveRunState {
         box_air_temp_c: f32,
         product_temp_c: Option<f32>,
         heater_on: bool,
-        reason: &'static str,
+        reason: impl Into<String>,
     ) -> LiveSample {
+        let reason = reason.into();
         let sample = LiveSample {
             seq: self.next_seq,
             time_s,
@@ -119,7 +120,7 @@ impl LiveAppState {
         box_air_temp_c: f32,
         product_temp_c: Option<f32>,
         heater_on: bool,
-        reason: &'static str,
+        reason: impl Into<String>,
     ) {
         let sample = {
             let mut run = self.run.lock().expect("live state mutex poisoned");

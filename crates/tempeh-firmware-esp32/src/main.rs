@@ -256,14 +256,14 @@ impl TasmotaHeaterOutput {
         }
     }
 
-    fn apply_decision(&mut self, heater_on: bool, reason: &'static str) -> Result<()> {
+    fn apply_decision(&mut self, heater_on: bool, reason: &str) -> Result<()> {
         if heater_on == self.heater_on() {
             return Ok(());
         }
         self.set_heater_fail_safe(heater_on, reason)
     }
 
-    fn set_heater(&mut self, on: bool, reason: &'static str) -> Result<()> {
+    fn set_heater(&mut self, on: bool, reason: &str) -> Result<()> {
         let url = self.command_url(on);
         let command_label = if on { "on" } else { "off" };
 
@@ -293,7 +293,7 @@ impl TasmotaHeaterOutput {
         Ok(())
     }
 
-    fn set_heater_fail_safe(&mut self, on: bool, reason: &'static str) -> Result<()> {
+    fn set_heater_fail_safe(&mut self, on: bool, reason: &str) -> Result<()> {
         match self.set_heater(on, reason) {
             Ok(()) => Ok(()),
             Err(error) if on => {
@@ -402,7 +402,7 @@ fn apply_and_print_control_sample(
     sample: RealRunSample,
     heater_output: &mut TasmotaHeaterOutput,
 ) -> Result<()> {
-    heater_output.apply_decision(sample.heater_on, sample.reason)?;
+    heater_output.apply_decision(sample.heater_on, sample.reason.as_str())?;
     print_control_sample(sample);
     Ok(())
 }

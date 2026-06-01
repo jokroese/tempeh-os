@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use tempeh_control::{ControlReading, Controller, Heater, run_trace_control};
 use tempeh_model::{EnvironmentState, TemperatureReading};
 use tempeh_pet::{PetEvent, PetReport, format_event_time, report_for_samples};
-use tempeh_protocol::parse_temperature_line;
+use tempeh_protocol::{parse_control_line, parse_temperature_line};
 use tempeh_runtime::{LatestTemperatureReadings, RealRunConfig, RealRunController, RealRunSample};
 use tempeh_sim::{SimConfig, Simulator, TemperatureTrace};
 
@@ -61,6 +61,9 @@ pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
         "real-control-live" => {
             run_real_control_live(env::args().nth(2), env::args().nth(3), env::args().nth(4))?;
         }
+        "monitor" | "monitor-live" => {
+            run_monitor_live(env::args().nth(2), env::args().nth(3))?;
+        }
         "ports" | "list-ports" => {
             list_serial_ports(env::args().any(|arg| arg == "--all"))?;
         }
@@ -77,7 +80,7 @@ pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
 
 fn print_help() {
     eprintln!(
-        "Usage:\n  cargo run -p tempeh-host -- html                                   # write out/sim.html\n  cargo run -p tempeh-host -- csv                                    # print simulation CSV\n  cargo run -p tempeh-host -- control                                # print simulated control-loop CSV\n  cargo run -p tempeh-host -- pet                                    # print the mycelial pet status\n  cargo run -p tempeh-host -- ports                                  # recommend likely ESP32 serial port\n  cargo run -p tempeh-host -- ports --all                            # list all available serial ports\n  cargo run -p tempeh-host -- plug-test <url>                        # turn Tasmota plug on, wait, turn off\n  cargo run -p tempeh-host -- trace-control-test <url>               # drive Tasmota plug from a short fake temperature trace\n  cargo run -p tempeh-host -- thermometer-test <port|->              # read labelled temperature lines from serial or stdin\n  cargo run -p tempeh-host -- real-control-test <port> <url> [csv]   # read real probe, drive plug, save CSV\n  cargo run -p tempeh-host -- real-control-live <port> <url> [csv]   # real control plus live web UI\n\nEnvironment:\n  TEMPEH_TASMOTA_URL=http://192.168.1.50"
+        "Usage:\n  cargo run -p tempeh-host -- html                                   # write out/sim.html\n  cargo run -p tempeh-host -- csv                                    # print simulation CSV\n  cargo run -p tempeh-host -- control                                # print simulated control-loop CSV\n  cargo run -p tempeh-host -- pet                                    # print the mycelial pet status\n  cargo run -p tempeh-host -- ports                                  # recommend likely ESP32 serial port\n  cargo run -p tempeh-host -- ports --all                            # list all available serial ports\n  cargo run -p tempeh-host -- plug-test <url>                        # turn Tasmota plug on, wait, turn off\n  cargo run -p tempeh-host -- trace-control-test <url>               # drive Tasmota plug from a short fake temperature trace\n  cargo run -p tempeh-host -- thermometer-test <port|->              # read labelled temperature lines from serial or stdin\n  cargo run -p tempeh-host -- real-control-test <port> <url> [csv]   # read real probe, drive plug, save CSV\n  cargo run -p tempeh-host -- real-control-live <port> <url> [csv]   # real control plus live web UI\n  cargo run -p tempeh-host -- monitor <port> [csv]                   # read firmware control output, save CSV, serve live UI\n\nShortcuts:\n  just monitor <port> [csv]\n\nEnvironment:\n  TEMPEH_TASMOTA_URL=http://192.168.1.50"
     );
 }
 
@@ -1030,6 +1033,77 @@ fn run_real_control_live(
     Ok(())
 }
 
+fn run_monitor_live(
+    source_arg: Option<String>,
+    csv_arg: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let source = source_arg.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "provide an ESP32 serial port, e.g. cargo run -p tempeh-host -- monitor /dev/cu.usbmodem1234561",
+        )
+    })?;
+    let csv_path = csv_arg.unwrap_or_else(default_monitor_csv_path);
+    let addr: SocketAddr = DEFAULT_LIVE_ADDR.parse()?;
+
+    let port = serialport::new(&source, DEFAULT_SERIAL_BAUD)
+        .timeout(Duration::from_millis(2_000))
+        .open()
+        .map_err(|error| {
+            std::io::Error::other(format!(
+                "failed to open serial port {source} at {DEFAULT_SERIAL_BAUD} baud: {error}"
+            ))
+        })?;
+
+    let stop_requested = Arc::new(AtomicBool::new(false));
+    {
+        let stop_requested = Arc::clone(&stop_requested);
+        ctrlc::set_handler(move || {
+            stop_requested.store(true, Ordering::SeqCst);
+        })
+        .map_err(|error| {
+            std::io::Error::other(format!("failed to install Ctrl-C handler: {error}"))
+        })?;
+    }
+
+    let header = RealRunSample::csv_header();
+    let mut csv_log = CsvLog::create(&csv_path, header)?;
+    let live_state = Arc::new(LiveAppState::new(csv_path.clone()));
+    let server_handle = spawn_live_server(Arc::clone(&live_state), addr);
+
+    eprintln!("Starting live monitor.");
+    eprintln!("Reading control output from {source} at {DEFAULT_SERIAL_BAUD} baud.");
+    eprintln!("Saving data to {csv_path}.");
+    eprintln!("Live UI: http://{addr}");
+    eprintln!("No heater control is active in monitor mode.");
+    eprintln!("Press Ctrl-C to stop.");
+
+    // Give the server thread a chance to fail fast on bind errors.
+    thread::sleep(Duration::from_millis(100));
+    if server_handle.is_finished() {
+        match server_handle.join() {
+            Ok(Err(error)) => return Err(std::io::Error::other(error).into()),
+            Ok(Ok(())) => {
+                return Err(std::io::Error::other("live UI server stopped unexpectedly").into());
+            }
+            Err(_) => {
+                return Err(std::io::Error::other("live UI server thread panicked").into());
+            }
+        }
+    }
+
+    run_monitor_live_loop(
+        BufReader::new(port),
+        Arc::clone(&stop_requested),
+        header,
+        &mut csv_log,
+        Arc::clone(&live_state),
+    )?;
+
+    eprintln!("Live monitor stopped.");
+    Ok(())
+}
+
 fn run_real_control_test_loop<R>(
     mut reader: R,
     heater: &mut TasmotaHeater,
@@ -1108,7 +1182,7 @@ where
                 sample.box_air_temp_c,
                 sample.product_temp_c,
                 sample.heater_on,
-                sample.reason,
+                sample.reason.clone(),
             );
         }
     }
@@ -1118,7 +1192,91 @@ where
     }
     Ok(())
 }
+
+fn run_monitor_live_loop<R>(
+    mut reader: R,
+    stop_requested: Arc<AtomicBool>,
+    header: &str,
+    csv_log: &mut CsvLog,
+    live_state: SharedLiveAppState,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    R: BufRead,
+{
+    let mut line = String::new();
+    let mut printed_header = false;
+
+    while !stop_requested.load(Ordering::SeqCst) {
+        line.clear();
+
+        let bytes = match reader.read_line(&mut line) {
+            Ok(bytes) => bytes,
+            Err(error)
+                if error.kind() == io::ErrorKind::TimedOut
+                    || error.kind() == io::ErrorKind::WouldBlock =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        };
+
+        if bytes == 0 {
+            break;
+        }
+
+        let control = match parse_control_line(&line) {
+            Ok(Some(control)) => control,
+            Ok(None) => continue,
+            Err(error) => {
+                eprintln!("Ignoring invalid control line {:?}: {error:?}", line.trim());
+                continue;
+            }
+        };
+
+        if !printed_header {
+            println!("{header}");
+            printed_header = true;
+        }
+
+        let sample = RealRunSample {
+            time_s: control.time_s,
+            room_air_temp_c: control.room_air_temp_c,
+            box_air_temp_c: control.box_air_temp_c,
+            product_temp_c: control.product_temp_c,
+            heater_on: control.heater_on,
+            reason: control.reason,
+        };
+
+        let row = sample.csv_row();
+        println!("{row}");
+        csv_log.write_row(&row)?;
+
+        live_state.push_sample(
+            sample.time_s,
+            sample.room_air_temp_c,
+            sample.box_air_temp_c,
+            sample.product_temp_c,
+            sample.heater_on,
+            sample.reason.clone(),
+        );
+    }
+
+    if !printed_header {
+        eprintln!("No control samples received.");
+        eprintln!(
+            "Expected firmware lines like: control,1,,22.437,23.125,1,below_target"
+        );
+    }
+
+    Ok(())
+}
+
 fn default_real_control_csv_path() -> String {
     let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
     format!("out/real-control-test-{timestamp}.csv")
+}
+
+fn default_monitor_csv_path() -> String {
+    let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    format!("out/monitor-{timestamp}.csv")
 }

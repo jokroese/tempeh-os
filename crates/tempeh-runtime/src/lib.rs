@@ -120,14 +120,14 @@ pub enum RealRunUpdate {
     Tick,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RealRunSample {
     pub time_s: f32,
     pub room_air_temp_c: Option<f32>,
     pub box_air_temp_c: f32,
     pub product_temp_c: Option<f32>,
     pub heater_on: bool,
-    pub reason: &'static str,
+    pub reason: String,
 }
 
 impl RealRunSample {
@@ -259,7 +259,7 @@ impl RealRunController {
             box_air_temp_c: latest.box_air_temp_c?,
             product_temp_c: latest.product_temp_c,
             heater_on: decision.heater_on,
-            reason: decision.reason,
+            reason: decision.reason.to_string(),
         })
     }
 
@@ -489,7 +489,7 @@ mod tests {
             box_air_temp_c: 22.4,
             product_temp_c: Some(23.1),
             heater_on: true,
-            reason: "below_target",
+            reason: "below_target".to_string(),
         };
 
         assert_eq!(sample.csv_row(), "2,20.200,22.400,23.100,1,below_target");
@@ -503,7 +503,7 @@ mod tests {
             box_air_temp_c: 22.4,
             product_temp_c: None,
             heater_on: false,
-            reason: "holding_off",
+            reason: "holding_off".to_string(),
         };
 
         assert_eq!(sample.csv_row(), "2,,22.400,,0,holding_off");
@@ -528,7 +528,7 @@ mod tests {
                 box_air_temp_c: 20.0,
                 product_temp_c: Some(21.0),
                 heater_on: false,
-                reason: "product_update",
+                reason: "product_update".to_string(),
             }
         );
     }
