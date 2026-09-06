@@ -1,3 +1,6 @@
+pub mod button;
+pub mod run_supervisor;
+
 use tempeh_control::Controller;
 use tempeh_model::{ControllerConfig, TemperatureProbe, TemperatureReading};
 
