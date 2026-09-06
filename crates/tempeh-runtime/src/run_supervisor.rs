@@ -95,6 +95,7 @@ pub struct RunSupervisor {
     config: SupervisorConfig,
     state: RunState,
     controller: RealRunController,
+    actuator_ready: bool,
 }
 
 impl RunSupervisor {
@@ -103,6 +104,7 @@ impl RunSupervisor {
             controller: RealRunController::new(config.run),
             config,
             state: RunState::Idle,
+            actuator_ready: false,
         }
     }
 
@@ -114,6 +116,14 @@ impl RunSupervisor {
         self.state.is_running() && self.controller.heater_on()
     }
 
+    pub fn actuator_ready(&self) -> bool {
+        self.actuator_ready
+    }
+
+    pub fn report_actuator_ready(&mut self) {
+        self.actuator_ready = true;
+    }
+
     pub fn handle_command(
         &mut self,
         time_s: f32,
@@ -121,15 +131,19 @@ impl RunSupervisor {
         command: RunCommand,
     ) -> SupervisorOutcome {
         match (self.state, command) {
-            (RunState::Idle, RunCommand::Start) => match self.probes_ready(time_s, latest) {
-                Ok(()) => self.enter(RunState::Running, "user_start"),
-                Err(_) => self.unchanged(),
-            },
+            (RunState::Idle, RunCommand::Start) => {
+                if self.actuator_ready && self.probes_ready(time_s, latest).is_ok() {
+                    self.enter(RunState::Running, "user_start")
+                } else {
+                    self.unchanged()
+                }
+            }
             (RunState::Running, RunCommand::Stop) => self.enter(RunState::Idle, "user_stop"),
             (RunState::Fault(_), RunCommand::AcknowledgeFault) => {
-                match self.probes_ready(time_s, latest) {
-                    Ok(()) => self.enter(RunState::Idle, "fault_acknowledged"),
-                    Err(_) => self.unchanged(),
+                if self.actuator_ready && self.probes_ready(time_s, latest).is_ok() {
+                    self.enter(RunState::Idle, "fault_acknowledged")
+                } else {
+                    self.unchanged()
                 }
             }
             _ => self.unchanged(),
@@ -161,6 +175,13 @@ impl RunSupervisor {
     }
 
     pub fn report_fault(&mut self, reason: FaultReason) -> SupervisorOutcome {
+        if matches!(
+            reason,
+            FaultReason::ActuatorFailed | FaultReason::BootConfigFailed
+        ) {
+            self.actuator_ready = false;
+        }
+
         if matches!(self.state, RunState::Fault(_)) {
             return self.unchanged();
         }
@@ -241,6 +262,7 @@ mod tests {
 
     fn started(time_s: f32, latest: &LatestTemperatureReadings) -> RunSupervisor {
         let mut supervisor = RunSupervisor::new(SupervisorConfig::default());
+        supervisor.report_actuator_ready();
         supervisor.handle_command(time_s, latest, RunCommand::Start);
         assert_eq!(supervisor.state(), RunState::Running);
         supervisor
@@ -252,6 +274,7 @@ mod tests {
 
         assert_eq!(supervisor.state(), RunState::Idle);
         assert!(!supervisor.desired_heater_on());
+        assert!(!supervisor.actuator_ready());
     }
 
     #[test]
@@ -306,6 +329,7 @@ mod tests {
         latest.update_at(0.0, TemperatureProbe::BoxAir, 20.0);
         let mut supervisor =
             RunSupervisor::new(SupervisorConfig::new(RealRunConfig::default(), false));
+        supervisor.report_actuator_ready();
 
         supervisor.handle_command(0.0, &latest, RunCommand::Start);
 
@@ -316,6 +340,7 @@ mod tests {
     fn start_does_not_require_room_air() {
         let latest = fresh_readings(0.0, 20.0);
         let mut supervisor = RunSupervisor::new(SupervisorConfig::default());
+        supervisor.report_actuator_ready();
 
         let outcome = supervisor.handle_command(0.0, &latest, RunCommand::Start);
 
@@ -460,6 +485,7 @@ mod tests {
         let latest = fresh_readings(0.0, 20.0);
         let mut supervisor = started(0.0, &latest);
         supervisor.report_fault(FaultReason::ActuatorFailed);
+        supervisor.report_actuator_ready();
 
         let outcome = supervisor.handle_command(1.0, &latest, RunCommand::AcknowledgeFault);
 
@@ -508,12 +534,60 @@ mod tests {
         let latest = fresh_readings(0.0, 20.0);
         let mut supervisor = started(0.0, &latest);
         supervisor.report_fault(FaultReason::ActuatorFailed);
+        supervisor.report_actuator_ready();
 
         supervisor.handle_command(1.0, &latest, RunCommand::AcknowledgeFault);
         assert_eq!(supervisor.state(), RunState::Idle);
 
         supervisor.handle_command(1.0, &latest, RunCommand::Start);
         assert_eq!(supervisor.state(), RunState::Running);
+    }
+
+    #[test]
+    fn start_is_rejected_until_the_actuator_is_ready() {
+        let latest = fresh_readings(0.0, 20.0);
+        let mut supervisor = RunSupervisor::new(SupervisorConfig::default());
+
+        supervisor.handle_command(0.0, &latest, RunCommand::Start);
+        assert_eq!(supervisor.state(), RunState::Idle);
+
+        supervisor.report_actuator_ready();
+        supervisor.handle_command(0.0, &latest, RunCommand::Start);
+        assert_eq!(supervisor.state(), RunState::Running);
+    }
+
+    #[test]
+    fn actuator_fault_requires_recovery_before_acknowledgement() {
+        let latest = fresh_readings(0.0, 20.0);
+        let mut supervisor = started(0.0, &latest);
+        supervisor.report_fault(FaultReason::ActuatorFailed);
+
+        supervisor.handle_command(1.0, &latest, RunCommand::AcknowledgeFault);
+        assert_eq!(
+            supervisor.state(),
+            RunState::Fault(FaultReason::ActuatorFailed)
+        );
+
+        supervisor.report_actuator_ready();
+        supervisor.handle_command(1.0, &latest, RunCommand::AcknowledgeFault);
+        assert_eq!(supervisor.state(), RunState::Idle);
+    }
+
+    #[test]
+    fn boot_configuration_fault_requires_recovery_before_acknowledgement() {
+        let latest = fresh_readings(0.0, 20.0);
+        let mut supervisor = started(0.0, &latest);
+        supervisor.report_fault(FaultReason::BootConfigFailed);
+
+        supervisor.handle_command(1.0, &latest, RunCommand::AcknowledgeFault);
+        assert_eq!(
+            supervisor.state(),
+            RunState::Fault(FaultReason::BootConfigFailed)
+        );
+
+        supervisor.report_actuator_ready();
+        supervisor.handle_command(1.0, &latest, RunCommand::AcknowledgeFault);
+        assert_eq!(supervisor.state(), RunState::Idle);
     }
 
     #[test]
