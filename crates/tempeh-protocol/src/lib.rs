@@ -1,3 +1,5 @@
+pub mod tasmota;
+
 use tempeh_model::TemperatureProbe;
 
 #[derive(Debug, Clone, Copy, PartialEq)]

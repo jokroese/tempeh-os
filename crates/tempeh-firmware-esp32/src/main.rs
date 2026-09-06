@@ -1,10 +1,10 @@
+mod tasmota;
+
 use anyhow::{Context, Result, bail};
-use embedded_svc::http::client::Client;
 use esp_idf_hal::delay::{Ets, FreeRtos};
 use esp_idf_hal::modem::Modem;
 use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
-use esp_idf_svc::http::client::{Configuration as HttpConfiguration, EspHttpConnection};
 use esp_idf_svc::log::EspLogger;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::wifi::{BlockingWifi, ClientConfiguration, Configuration, EspWifi};
@@ -20,6 +20,8 @@ use tempeh_model::TemperatureProbe;
 use tempeh_protocol::probe_name;
 use tempeh_runtime::{LatestTemperatureReadings, RealRunConfig, RealRunController, RealRunSample};
 
+use crate::tasmota::TasmotaHeaterOutput;
+
 const BOX_AIR_GPIO: i32 = 5;
 const ROOM_AIR_GPIO: i32 = 6;
 const PRODUCT_GPIO: i32 = 4;
@@ -29,7 +31,6 @@ const DS18B20_CONVERT_T: u8 = 0x44;
 const DS18B20_READ_SCRATCHPAD: u8 = 0xBE;
 const WIFI_SSID: Option<&str> = option_env!("TEMPEH_WIFI_SSID");
 const WIFI_PASSWORD: Option<&str> = option_env!("TEMPEH_WIFI_PASSWORD");
-const TASMOTA_BASE_URL: Option<&str> = option_env!("TEMPEH_TASMOTA_BASE_URL");
 const PROBE_BOX_AIR: Option<&str> = option_env!("TEMPEH_PROBE_BOX_AIR");
 const PROBE_ROOM_AIR: Option<&str> = option_env!("TEMPEH_PROBE_ROOM_AIR");
 const PROBE_PRODUCT: Option<&str> = option_env!("TEMPEH_PROBE_PRODUCT");
@@ -224,121 +225,6 @@ fn connect_wifi(modem: Modem) -> Result<BlockingWifi<EspWifi<'static>>> {
     );
 
     Ok(wifi)
-}
-
-#[derive(Debug, Clone)]
-struct TasmotaHeaterOutput {
-    base_url: String,
-    heater_on: bool,
-}
-
-impl TasmotaHeaterOutput {
-    fn from_build_config() -> Result<Self> {
-        let base_url = TASMOTA_BASE_URL.unwrap_or_default();
-
-        if base_url.is_empty() {
-            bail!(
-                "TEMPEH_TASMOTA_BASE_URL is not set. Add [tasmota].base_url to firmware.local.toml"
-            );
-        }
-
-        Ok(Self::new(base_url))
-    }
-
-    fn heater_on(&self) -> bool {
-        self.heater_on
-    }
-
-    fn new(base_url: impl Into<String>) -> Self {
-        Self {
-            base_url: normalise_tasmota_base_url(base_url.into()),
-            heater_on: false,
-        }
-    }
-
-    fn apply_decision(&mut self, heater_on: bool, reason: &str) -> Result<()> {
-        if heater_on == self.heater_on() {
-            return Ok(());
-        }
-        self.set_heater_fail_safe(heater_on, reason)
-    }
-
-    fn set_heater(&mut self, on: bool, reason: &str) -> Result<()> {
-        let url = self.command_url(on);
-        let command_label = if on { "on" } else { "off" };
-
-        info!("sending Tasmota heater {command_label} command: reason={reason}");
-        info!("Tasmota command URL: {url}");
-
-        let connection = EspHttpConnection::new(&HttpConfiguration::default())
-            .context("failed to create ESP HTTP connection")?;
-        let mut client = Client::wrap(connection);
-        let request = client
-            .get(&url)
-            .with_context(|| format!("failed to create Tasmota request: {url}"))?;
-        let response = request
-            .submit()
-            .with_context(|| format!("failed to send Tasmota request: {url}"))?;
-
-        let status = response.status();
-        if !(200..300).contains(&status) {
-            bail!("Tasmota heater command failed with HTTP status {status}");
-        }
-
-        self.heater_on = on;
-        info!(
-            "Tasmota heater command accepted: heater_on={}",
-            self.heater_on
-        );
-        Ok(())
-    }
-
-    fn set_heater_fail_safe(&mut self, on: bool, reason: &str) -> Result<()> {
-        match self.set_heater(on, reason) {
-            Ok(()) => Ok(()),
-            Err(error) if on => {
-                warn!(
-                    "failed to turn heater on for reason={reason}; attempting fail-safe off: {error:#}"
-                );
-
-                if let Err(off_error) = self.set_heater(false, "actuator_on_failed_safe_off") {
-                    warn!(
-                        "fail-safe off command also failed after actuator-on error: {off_error:#}"
-                    );
-                }
-
-                Err(error).context("failed to turn heater on; fail-safe off attempted")
-            }
-            Err(error) => {
-                warn!(
-                    "failed to turn heater off for reason={reason}; actuator state is unknown: {error:#}"
-                );
-                self.heater_on = false;
-                Err(error).context("failed to turn heater off; actuator state is unknown")
-            }
-        }
-    }
-
-    fn command_url(&self, on: bool) -> String {
-        let command = if on { "Power%20On" } else { "Power%20Off" };
-        format!("{}/cm?cmnd={command}", self.base_url)
-    }
-}
-
-fn normalise_tasmota_base_url(mut base_url: String) -> String {
-    base_url = base_url.trim().to_string();
-
-    if let Some((before_query, _query)) = base_url.split_once('?') {
-        base_url = before_query.to_string();
-    }
-
-    base_url = base_url.trim_end_matches('/').to_string();
-
-    if base_url.starts_with("http://") || base_url.starts_with("https://") {
-        base_url
-    } else {
-        format!("http://{base_url}")
-    }
 }
 
 fn read_update_and_print(
@@ -631,17 +517,5 @@ mod tests {
     fn crc8_matches_ds18b20_scratchpad_example() {
         let scratchpad = [0x50, 0x05, 0x4B, 0x46, 0x7F, 0xFF, 0x0C, 0x10, 0x1C];
         assert_eq!(crc8(&scratchpad[..8]), scratchpad[8]);
-    }
-
-    #[test]
-    fn normalise_tasmota_base_url_trims_and_adds_scheme() {
-        assert_eq!(
-            normalise_tasmota_base_url("192.168.8.193".into()),
-            "http://192.168.8.193"
-        );
-        assert_eq!(
-            normalise_tasmota_base_url("http://192.168.8.193/".into()),
-            "http://192.168.8.193"
-        );
     }
 }
