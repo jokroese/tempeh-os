@@ -1,4 +1,5 @@
 pub mod button;
+pub mod heater_lease;
 pub mod run_supervisor;
 
 use tempeh_control::Controller;

@@ -1,0 +1,277 @@
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LeaseConfig {
+    pub lease_duration_s: f32,
+    pub renewal_interval_s: f32,
+}
+
+impl LeaseConfig {
+    pub fn new(lease_duration_s: f32, renewal_interval_s: f32) -> Self {
+        let config = Self {
+            lease_duration_s,
+            renewal_interval_s,
+        };
+        debug_assert!(config.is_safe());
+        config
+    }
+
+    pub fn is_safe(&self) -> bool {
+        self.renewal_interval_s > 0.0 && self.lease_duration_s >= 3.0 * self.renewal_interval_s
+    }
+}
+
+impl Default for LeaseConfig {
+    fn default() -> Self {
+        Self::new(20.0, 5.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeaseAction {
+    None,
+    SendOn,
+    SendOff,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HeaterLease {
+    config: LeaseConfig,
+    desired_on: bool,
+    confirmed_on: bool,
+    due_at_s: f32,
+    last_successful_command_s: Option<f32>,
+    last_successful_renewal_s: Option<f32>,
+}
+
+impl HeaterLease {
+    pub fn new(config: LeaseConfig) -> Self {
+        Self {
+            config,
+            desired_on: false,
+            confirmed_on: false,
+            due_at_s: 0.0,
+            last_successful_command_s: None,
+            last_successful_renewal_s: None,
+        }
+    }
+
+    pub fn set_desired(&mut self, on: bool, now_s: f32) {
+        if on == self.desired_on {
+            return;
+        }
+        self.desired_on = on;
+        self.due_at_s = now_s;
+    }
+
+    pub fn poll(&mut self, now_s: f32) -> LeaseAction {
+        if now_s < self.due_at_s {
+            return LeaseAction::None;
+        }
+        self.due_at_s = now_s + self.config.renewal_interval_s;
+
+        if self.desired_on {
+            LeaseAction::SendOn
+        } else {
+            LeaseAction::SendOff
+        }
+    }
+
+    pub fn record_success(&mut self, now_s: f32, on: bool) {
+        self.confirmed_on = on;
+        self.last_successful_command_s = Some(now_s);
+        if on {
+            self.last_successful_renewal_s = Some(now_s);
+        }
+    }
+
+    pub fn record_failure(&mut self, now_s: f32) {
+        self.confirmed_on = false;
+        self.due_at_s = now_s + self.config.renewal_interval_s;
+    }
+
+    pub fn desired_heater_on(&self) -> bool {
+        self.desired_on
+    }
+
+    pub fn confirmed_heater_on(&self) -> bool {
+        self.confirmed_on
+    }
+
+    pub fn last_successful_command_s(&self) -> Option<f32> {
+        self.last_successful_command_s
+    }
+
+    pub fn last_successful_renewal_s(&self) -> Option<f32> {
+        self.last_successful_renewal_s
+    }
+
+    pub fn lease_expires_at_s(&self) -> Option<f32> {
+        self.last_successful_renewal_s
+            .map(|renewed_at_s| renewed_at_s + self.config.lease_duration_s)
+    }
+
+    pub fn lease_expired(&self, now_s: f32) -> bool {
+        self.lease_expires_at_s()
+            .is_none_or(|expires_at_s| now_s >= expires_at_s)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lease() -> HeaterLease {
+        HeaterLease::new(LeaseConfig::default())
+    }
+
+    #[test]
+    fn default_lease_is_at_least_three_renewal_intervals() {
+        let config = LeaseConfig::default();
+
+        assert_eq!(config.lease_duration_s, 20.0);
+        assert_eq!(config.renewal_interval_s, 5.0);
+        assert!(config.is_safe());
+    }
+
+    #[test]
+    fn rejects_a_lease_shorter_than_three_renewal_intervals() {
+        assert!(
+            !LeaseConfig {
+                lease_duration_s: 10.0,
+                renewal_interval_s: 5.0,
+            }
+            .is_safe()
+        );
+    }
+
+    #[test]
+    fn a_new_lease_sends_off_and_confirms_nothing() {
+        let mut lease = lease();
+
+        assert_eq!(lease.poll(0.0), LeaseAction::SendOff);
+        assert!(!lease.confirmed_heater_on());
+        assert_eq!(lease.last_successful_renewal_s(), None);
+        assert_eq!(lease.lease_expires_at_s(), None);
+        assert!(lease.lease_expired(0.0));
+    }
+
+    #[test]
+    fn requesting_heat_sends_on_immediately() {
+        let mut lease = lease();
+        lease.poll(0.0);
+
+        lease.set_desired(true, 1.0);
+
+        assert_eq!(lease.poll(1.0), LeaseAction::SendOn);
+    }
+
+    #[test]
+    fn renews_at_the_renewal_interval_while_heating() {
+        let mut lease = lease();
+        lease.set_desired(true, 0.0);
+
+        assert_eq!(lease.poll(0.0), LeaseAction::SendOn);
+        lease.record_success(0.0, true);
+
+        assert_eq!(lease.poll(4.9), LeaseAction::None);
+        assert_eq!(lease.poll(5.0), LeaseAction::SendOn);
+        lease.record_success(5.0, true);
+
+        assert_eq!(lease.last_successful_renewal_s(), Some(5.0));
+        assert_eq!(lease.lease_expires_at_s(), Some(25.0));
+    }
+
+    #[test]
+    fn never_sends_on_while_heat_is_not_desired() {
+        let mut lease = lease();
+        lease.set_desired(true, 0.0);
+        lease.poll(0.0);
+        lease.record_success(0.0, true);
+        lease.set_desired(false, 1.0);
+
+        let mut now_s = 1.0;
+        while now_s < 120.0 {
+            assert_ne!(lease.poll(now_s), LeaseAction::SendOn);
+            now_s += 0.05;
+        }
+    }
+
+    #[test]
+    fn stopping_sends_off_immediately_then_repeats_every_interval() {
+        let mut lease = lease();
+        lease.set_desired(true, 0.0);
+        lease.poll(0.0);
+        lease.record_success(0.0, true);
+
+        lease.set_desired(false, 2.0);
+        assert_eq!(lease.poll(2.0), LeaseAction::SendOff);
+        lease.record_success(2.0, false);
+
+        assert_eq!(lease.poll(6.9), LeaseAction::None);
+        assert_eq!(lease.poll(7.0), LeaseAction::SendOff);
+    }
+
+    #[test]
+    fn a_failed_renewal_does_not_advance_the_lease() {
+        let mut lease = lease();
+        lease.set_desired(true, 0.0);
+        lease.poll(0.0);
+        lease.record_success(0.0, true);
+        assert_eq!(lease.lease_expires_at_s(), Some(20.0));
+
+        lease.poll(5.0);
+        lease.record_failure(5.0);
+
+        assert!(!lease.confirmed_heater_on());
+        assert_eq!(lease.last_successful_renewal_s(), Some(0.0));
+        assert_eq!(lease.lease_expires_at_s(), Some(20.0));
+        assert!(!lease.lease_expired(19.9));
+        assert!(lease.lease_expired(20.0));
+    }
+
+    #[test]
+    fn a_failed_renewal_retries_after_the_renewal_interval() {
+        let mut lease = lease();
+        lease.set_desired(true, 0.0);
+        lease.poll(0.0);
+        lease.record_failure(0.0);
+
+        assert_eq!(lease.poll(4.9), LeaseAction::None);
+        assert_eq!(lease.poll(5.0), LeaseAction::SendOn);
+    }
+
+    #[test]
+    fn a_successful_off_does_not_renew_the_lease() {
+        let mut lease = lease();
+        lease.set_desired(true, 0.0);
+        lease.poll(0.0);
+        lease.record_success(0.0, true);
+
+        lease.set_desired(false, 1.0);
+        lease.poll(1.0);
+        lease.record_success(1.0, false);
+
+        assert_eq!(lease.last_successful_command_s(), Some(1.0));
+        assert_eq!(lease.last_successful_renewal_s(), Some(0.0));
+        assert!(!lease.confirmed_heater_on());
+    }
+
+    #[test]
+    fn renewal_is_never_later_than_the_renewal_interval_while_heating() {
+        let mut lease = lease();
+        lease.set_desired(true, 0.0);
+
+        let mut now_s = 0.0;
+        let mut last_renewal_s = 0.0;
+        while now_s < 300.0 {
+            if lease.poll(now_s) == LeaseAction::SendOn {
+                lease.record_success(now_s, true);
+                last_renewal_s = now_s;
+            }
+            assert!(
+                now_s - last_renewal_s <= LeaseConfig::default().renewal_interval_s,
+                "renewal gap exceeded at {now_s}"
+            );
+            now_s += 0.05;
+        }
+    }
+}
