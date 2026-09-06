@@ -219,20 +219,20 @@ pub fn parse_state_line(line: &str) -> Result<Option<ParsedStateLine>, ProtocolE
 pub struct ParsedActuatorLine {
     pub time_s: f32,
     pub desired_heater_on: bool,
-    pub confirmed_heater_on: bool,
+    pub confirmed_heater_on: Option<bool>,
     pub reason: String,
 }
 
 pub fn format_actuator_line(
     time_s: f32,
     desired_heater_on: bool,
-    confirmed_heater_on: bool,
+    confirmed_heater_on: Option<bool>,
     reason: &str,
 ) -> String {
     format!(
         "actuator,{time_s:.0},{},{},{reason}",
         if desired_heater_on { 1 } else { 0 },
-        if confirmed_heater_on { 1 } else { 0 },
+        format_optional_flag(confirmed_heater_on),
     )
 }
 
@@ -259,7 +259,7 @@ pub fn parse_actuator_line(line: &str) -> Result<Option<ParsedActuatorLine>, Pro
     let time_s = parse_time(time_text).ok_or(ProtocolError::InvalidActuatorLine)?;
     let desired_heater_on = parse_flag(desired_text).ok_or(ProtocolError::InvalidActuatorLine)?;
     let confirmed_heater_on =
-        parse_flag(confirmed_text).ok_or(ProtocolError::InvalidActuatorLine)?;
+        parse_optional_flag(confirmed_text).ok_or(ProtocolError::InvalidActuatorLine)?;
 
     Ok(Some(ParsedActuatorLine {
         time_s,
@@ -292,6 +292,22 @@ fn parse_flag(text: &str) -> Option<bool> {
         "0" => Some(false),
         "1" => Some(true),
         _ => None,
+    }
+}
+
+fn format_optional_flag(value: Option<bool>) -> &'static str {
+    match value {
+        Some(true) => "1",
+        Some(false) => "0",
+        None => "",
+    }
+}
+
+fn parse_optional_flag(text: &str) -> Option<Option<bool>> {
+    if text.is_empty() {
+        Some(None)
+    } else {
+        parse_flag(text).map(Some)
     }
 }
 
@@ -505,7 +521,7 @@ mod tests {
     #[test]
     fn formats_and_parses_actuator_lines() {
         assert_eq!(
-            format_actuator_line(53.0, true, true, "lease_renewed"),
+            format_actuator_line(53.0, true, Some(true), "lease_renewed"),
             "actuator,53,1,1,lease_renewed"
         );
         assert_eq!(
@@ -515,7 +531,7 @@ mod tests {
             ParsedActuatorLine {
                 time_s: 721.0,
                 desired_heater_on: false,
-                confirmed_heater_on: false,
+                confirmed_heater_on: Some(false),
                 reason: "fault_off".to_string(),
             }
         );
@@ -528,7 +544,22 @@ mod tests {
             .expect("actuator line");
 
         assert!(parsed.desired_heater_on);
-        assert!(!parsed.confirmed_heater_on);
+        assert_eq!(parsed.confirmed_heater_on, Some(false));
+    }
+
+    #[test]
+    fn formats_and_parses_an_unknown_confirmed_actuator_state() {
+        assert_eq!(
+            format_actuator_line(90.0, false, None, "command_failed"),
+            "actuator,90,0,,command_failed"
+        );
+
+        let parsed = parse_actuator_line("actuator,90,0,,command_failed")
+            .unwrap()
+            .expect("actuator line");
+
+        assert!(!parsed.desired_heater_on);
+        assert_eq!(parsed.confirmed_heater_on, None);
     }
 
     #[test]
