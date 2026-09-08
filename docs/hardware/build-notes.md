@@ -26,7 +26,7 @@ Connect the box-air adapter to the ESP32:
 ```text
 box adapter VCC        -> ESP32 3V3
 box adapter GND / BLK  -> ESP32 GND
-box adapter DATA       -> ESP32 GPIO5
+box adapter DATA       -> ESP32 GPIO13
 ```
 
 Connect the room-air adapter to the ESP32:
@@ -44,6 +44,15 @@ product adapter VCC        -> ESP32 3V3
 product adapter GND / BLK  -> ESP32 GND
 product adapter DATA       -> ESP32 GPIO4
 ```
+
+The controller uses the board hardware for local supervision:
+
+```text
+built-in BOOT button       -> GPIO0
+built-in addressable LED   -> GPIO48
+```
+
+Hold BOOT for 2 seconds to start or acknowledge a recovered fault. Press it once to stop a running controller. LED colours are amber for boot, blue for idle, green for running, and red for fault.
 
 Expected serial output from the ESP32:
 
@@ -72,13 +81,16 @@ ESPFLASH_PORT=/dev/cu.usbmodem1234561 cargo run --release
 
 ## Probe naming
 
-- `box_air`: air temperature at rack/food height, GPIO5, used for normal heater control.
+- `box_air`: air temperature at rack/food height, GPIO13, used for normal heater control.
 - `room_air`: ambient room temperature outside the incubator, GPIO6, logged only.
 - `product`: bean mass / bag-adjacent temperature, GPIO4, logged and used as hard safety cutoff by the host controller.
 
 ## First test protocol
 
-1. Run the box_air and room_air probes side by side at room temperature for 10 minutes.
-2. Run empty-box heat test to 30 °C.
-3. Run dummy-load test with wet beans/water mass.
-4. Only then run food fermentation.
+1. Disconnect the heat mat and complete the firmware no-load acceptance check.
+2. Run the box_air and room_air probes side by side at room temperature for 10 minutes.
+3. Run empty-box heat test to 30 °C.
+4. Run dummy-load test with wet beans/water mass.
+5. Only then run food fermentation.
+
+The no-load firmware check passed on 9 September 2026 with the heat mat disconnected. Sensor loss, ESP32 power loss, and Wi-Fi loss each resulted in relay-off behaviour. Wi-Fi and Tasmota recovered without an ESP32 reboot; the controller remained fault-latched until a deliberate acknowledgement and then completed another supervised start/stop cycle. Two isolated DS18B20 CRC errors were safely rejected; monitor this during the next probe comparison test and inspect the connections if it continues.

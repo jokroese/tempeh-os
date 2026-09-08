@@ -100,13 +100,13 @@ password = "your-wifi-password"
 base_url = "http://192.0.2.10"
 ```
 
-Then:
+Then, from within `crates/tempeh-firmware-esp32`:
 
 ```bash
 ESPFLASH_PORT=/dev/cu.usbmodem1234561 cargo run --release
 ```
 
-On boot, the ESP32 sends a Tasmota Power Off command before continuing normal probe reads. It then applies shared runtime decisions to the configured Tasmota plug, sending HTTP commands only when the desired heater state changes.
+On boot, the ESP32 confirms Tasmota `Power Off`, `PowerOnState 0`, and a 20-second `PulseTime`, then remains idle. Hold the built-in BOOT button for 2 seconds to start a supervised run. While heat is requested, the ESP32 renews the plug-side lease every 5 seconds; press BOOT once to stop.
 
 The firmware currently reads three DS18B20 probes on separate pins:
 
@@ -116,7 +116,7 @@ temp,room_air,20.125
 temp,product,23.125
 ```
 
-Probe GPIO mapping: box_air → GPIO5, room_air → GPIO6, product → GPIO4.
+Probe GPIO mapping: box_air → GPIO13, room_air → GPIO6, product → GPIO4.
 
 The firmware also runs the shared real-run policy on device and emits diagnostic control rows:
 
@@ -125,7 +125,7 @@ control,time_s,room_air_temp_c,box_air_temp_c,product_temp_c,heater_on,reason
 control,1,,22.437,23.125,1,below_target
 ```
 
-These rows show what the ESP32 would do, but the firmware does not actuate the heater yet.
+The firmware actuates the configured Tasmota plug directly. The laptop is optional and can monitor `temp`, `control`, `state`, and `actuator` records over USB serial.
 
 ## Real control smoke test
 
