@@ -114,12 +114,15 @@ impl HeaterLease {
         if now_s < self.due_at_s {
             return LeaseAction::None;
         }
-        self.due_at_s = now_s + self.config.renewal_interval_s;
 
         if self.desired_on {
+            self.due_at_s = now_s + self.config.renewal_interval_s;
             LeaseAction::SendOn
-        } else {
+        } else if self.confirmed_state != ConfirmedHeaterState::Off {
+            self.due_at_s = now_s + self.config.renewal_interval_s;
             LeaseAction::SendOff
+        } else {
+            LeaseAction::None
         }
     }
 
@@ -286,7 +289,7 @@ mod tests {
     }
 
     #[test]
-    fn stopping_sends_off_immediately_then_repeats_every_interval() {
+    fn stopping_sends_off_once_and_then_remains_quiet() {
         let mut lease = lease();
         lease.set_desired(true, 0.0);
         lease.poll(0.0);
@@ -297,7 +300,8 @@ mod tests {
         lease.record_success(2.0, false);
 
         assert_eq!(lease.poll(6.9), LeaseAction::None);
-        assert_eq!(lease.poll(7.0), LeaseAction::SendOff);
+        assert_eq!(lease.poll(7.0), LeaseAction::None);
+        assert_eq!(lease.poll(120.0), LeaseAction::None);
     }
 
     #[test]
