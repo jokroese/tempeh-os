@@ -1263,9 +1263,7 @@ where
 
     if !printed_header {
         eprintln!("No control samples received.");
-        eprintln!(
-            "Expected firmware lines like: control,1,,22.437,23.125,1,below_target"
-        );
+        eprintln!("Expected firmware lines like: control,1,,22.437,23.125,1,below_target");
     }
 
     Ok(())

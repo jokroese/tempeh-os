@@ -119,15 +119,15 @@ This crate currently:
 
 - reads DS18B20 probes;
 - emits `temp,...` lines;
-- runs `tempeh-runtime::RealRunController` on-device;
-- emits diagnostic `control,...` rows;
-- applies policy decisions to a dry-run heater output.
-
-It does not actuate the heater yet.
+- runs `tempeh-runtime::RunSupervisor` on-device;
+- accepts deliberate start, stop, and fault-acknowledgement commands from the built-in button;
+- emits `control,...`, `state,...`, and `actuator,...` diagnostics;
+- renews a time-limited Tasmota heater lease;
+- indicates idle, running, and fault states on the built-in RGB LED.
 
 ## Current control boundary
 
-There are currently two control paths.
+There are two available control paths.
 
 ### Host-actuated control
 
@@ -139,25 +139,25 @@ ESP32 probes
   -> Tasmota HTTP plug command
 ```
 
-This is the current path for real supervised heat-mat runs.
+This remains useful for host-driven experiments.
 
 ### Firmware-evaluated control
 
 ```text
-ESP32 probes
-  -> tempeh-runtime
-  -> control,... diagnostic rows
+ESP32 probes and button
+  -> tempeh-runtime::RunSupervisor
+  -> renewable Tasmota HTTP lease
 ```
 
-This proves that the ESP32 can run the same real-run policy as the host.
-
-The firmware path is currently non-actuating. A `heater_on=true` decision in a firmware `control,...` row means “the firmware policy would ask for heat”, not “the firmware has switched heat on”.
+This path is laptop-independent. The serial records distinguish desired heat from the relay state confirmed by Tasmota.
 
 ## Safety invariants
 
 Any heater-actuating implementation must preserve these invariants:
 
 - the heater starts off on boot;
+- cold readings cannot start heating while the supervisor is idle;
+- starting and fault acknowledgement require deliberate local input;
 - the heater returns off on reset or panic where possible;
 - missing `box_air` means no heat;
 - stale `box_air` means no heat;
@@ -166,11 +166,13 @@ Any heater-actuating implementation must preserve these invariants:
 - product hard cutoff means no heat;
 - box-air hard cutoff means no heat;
 - failed actuator commands must be visible in logs;
+- heater-on commands must be renewed before the plug-side lease expires;
+- Tasmota response bodies must confirm the requested state or setting;
 - control decisions and actuator state should be distinguishable in logs.
 
 Firmware runs the policy on a periodic safety tick, not only after successful probe reads. This allows stale-reading safety to turn the heater output off even if probe reads stop producing fresh values.
 
-## Path to laptop-free operation
+## Laptop-free operation
 
 The target state is:
 
@@ -180,22 +182,15 @@ ESP32 probes
   -> ESP32 heater adapter
 ```
 
-At that point the laptop is optional. It may still be useful for logs, charts, and debugging, but it should not be required to keep a batch running.
+The laptop is optional. It remains useful for logs, charts, and debugging, but is not required to keep a supervised run active.
 
-The next actuator design decision is the heater adapter:
-
-1. ESP32 controls a relay or SSR directly.
-2. ESP32 controls the existing Tasmota plug over Wi-Fi.
-
-These have different failure modes and should not be mixed casually.
-
-The current firmware-side heater output is dry-run only:
+The selected actuator boundary is:
 
 ```text
-RealRunController -> FirmwareHeaterOutput -> dry-run log
+RunSupervisor -> HeaterLease -> TasmotaHeaterOutput -> Tasmota plug
 ```
 
-The next implementation step is to replace or wrap the dry-run output with exactly one real actuator backend.
+The firmware confirms `PowerOnState 0` and a 20-second `PulseTime` before declaring the actuator ready. It renews the lease every 5 seconds while heat is desired. Failed commands enter a latched fault and stop renewal; Tasmota then turns the relay off when its remaining lease expires. After a network interruption, firmware requests Wi-Fi reconnection and reapplies the safe Tasmota configuration before it permits the fault to be acknowledged.
 
 ## Dependency direction
 

@@ -2055,6 +2055,7 @@ dependencies = [
 name = "tempeh-protocol"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "tempeh-model",
 ]
 
