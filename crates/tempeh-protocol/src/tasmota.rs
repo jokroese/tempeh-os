@@ -24,6 +24,14 @@ pub fn power_command_url(base_url: &str, on: bool) -> String {
     command_url(base_url, if on { "Power%20On" } else { "Power%20Off" })
 }
 
+pub const fn pulse_time_value_for_seconds(seconds: u32) -> Option<u32> {
+    match seconds {
+        1..=11 => Some(seconds * 10),
+        12..=64_800 => Some(seconds + 100),
+        _ => None,
+    }
+}
+
 pub fn pulse_time_command_url(base_url: &str, value: u32) -> String {
     command_url(base_url, &format!("PulseTime%20{value}"))
 }
@@ -406,5 +414,16 @@ mod tests {
             power_on_state_command_url("http://192.168.8.193", 0),
             "http://192.168.8.193/cm?cmnd=PowerOnState%200"
         );
+    }
+
+    #[test]
+    fn encodes_tasmota_pulse_time_seconds() {
+        assert_eq!(pulse_time_value_for_seconds(1), Some(10));
+        assert_eq!(pulse_time_value_for_seconds(11), Some(110));
+        assert_eq!(pulse_time_value_for_seconds(12), Some(112));
+        assert_eq!(pulse_time_value_for_seconds(20), Some(120));
+        assert_eq!(pulse_time_value_for_seconds(64_800), Some(64_900));
+        assert_eq!(pulse_time_value_for_seconds(0), None);
+        assert_eq!(pulse_time_value_for_seconds(64_801), None);
     }
 }
