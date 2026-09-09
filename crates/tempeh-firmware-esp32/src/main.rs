@@ -1,3 +1,4 @@
+mod mqtt;
 mod status_led;
 mod tasmota;
 
@@ -27,6 +28,7 @@ use tempeh_runtime::run_supervisor::{
 };
 use tempeh_runtime::{LatestTemperatureReadings, RealRunConfig, RealRunUpdate};
 
+use crate::mqtt::MqttTelemetry;
 use crate::status_led::{Status, StatusLed};
 use crate::tasmota::TasmotaHeaterOutput;
 
@@ -189,6 +191,14 @@ fn main() -> Result<()> {
         "control output: control,time_s,room_air_temp_c,box_air_temp_c,product_temp_c,heater_on,reason"
     );
 
+    let mut mqtt = match MqttTelemetry::from_build_config(probes) {
+        Ok(telemetry) => telemetry,
+        Err(error) => {
+            warn!("MQTT unavailable; continuing without telemetry: {error:#}");
+            None
+        }
+    };
+
     show_status(&mut status_led, supervisor.state());
 
     let mut box_air_conversion_started = false;
@@ -291,6 +301,16 @@ fn main() -> Result<()> {
         lease.set_desired(supervisor.desired_heater_on(), time_s);
         run_heater_lease(time_s, &mut lease, &mut heater_output, &mut supervisor);
         show_status(&mut status_led, supervisor.state());
+        if let Some(mqtt) = mqtt.as_mut() {
+            mqtt.poll(
+                time_s,
+                &latest,
+                supervisor.state(),
+                supervisor.desired_heater_on(),
+                lease.confirmed_heater_on(),
+                supervisor.actuator_ready(),
+            );
+        }
         maybe_log_runtime_diagnostics(time_s, &mut last_diagnostics_s, last_safety_tick_s);
 
         FreeRtos::delay_ms(LOOP_DELAY_MS);
