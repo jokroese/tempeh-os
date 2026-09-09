@@ -1,3 +1,5 @@
+pub mod home_assistant;
+pub mod mqtt;
 pub mod tasmota;
 
 use tempeh_model::TemperatureProbe;

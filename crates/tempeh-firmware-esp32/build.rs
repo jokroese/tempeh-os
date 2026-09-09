@@ -21,6 +21,25 @@ fn main() {
             );
         }
 
+        if let Some(mqtt) = config.mqtt {
+            println!("cargo:rustc-env=TEMPEH_MQTT_BROKER_URL={}", mqtt.broker_url);
+            println!("cargo:rustc-env=TEMPEH_MQTT_DEVICE_ID={}", mqtt.device_id);
+            println!(
+                "cargo:rustc-env=TEMPEH_MQTT_DEVICE_NAME={}",
+                mqtt.device_name
+            );
+            println!(
+                "cargo:rustc-env=TEMPEH_MQTT_HOME_ASSISTANT_DISCOVERY={}",
+                mqtt.home_assistant_discovery
+            );
+            if let Some(username) = mqtt.username {
+                println!("cargo:rustc-env=TEMPEH_MQTT_USERNAME={username}");
+            }
+            if let Some(password) = mqtt.password {
+                println!("cargo:rustc-env=TEMPEH_MQTT_PASSWORD={password}");
+            }
+        }
+
         println!(
             "cargo:rustc-env=TEMPEH_PROBE_BOX_AIR={}",
             config.probes.box_air
@@ -40,6 +59,7 @@ fn main() {
 struct LocalFirmwareConfig {
     wifi: WifiConfig,
     tasmota: Option<TasmotaConfig>,
+    mqtt: Option<MqttConfig>,
     probes: ProbeConfig,
 }
 
@@ -71,54 +91,87 @@ struct TasmotaConfig {
     base_url: String,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct MqttConfig {
+    broker_url: String,
+    username: Option<String>,
+    password: Option<String>,
+    device_id: String,
+    device_name: String,
+    home_assistant_discovery: bool,
+}
+
 impl LocalFirmwareConfig {
     fn read(path: impl AsRef<Path>) -> Option<Self> {
         let text = fs::read_to_string(path).ok()?;
         Some(Self {
             wifi: WifiConfig {
-                ssid: read_toml_string(&text, "ssid")?,
-                password: read_toml_string(&text, "password")?,
+                ssid: read_toml_string(&text, "wifi", "ssid")?,
+                password: read_toml_string(&text, "wifi", "password")?,
             },
-            tasmota: read_toml_string(&text, "base_url").map(|base_url| TasmotaConfig { base_url }),
+            tasmota: read_toml_string(&text, "tasmota", "base_url")
+                .map(|base_url| TasmotaConfig { base_url }),
+            mqtt: read_toml_string(&text, "mqtt", "broker_url").map(|broker_url| MqttConfig {
+                broker_url,
+                username: read_toml_string(&text, "mqtt", "username"),
+                password: read_toml_string(&text, "mqtt", "password"),
+                device_id: read_toml_string(&text, "mqtt", "device_id")
+                    .unwrap_or_else(|| "tempeh_controller".to_string()),
+                device_name: read_toml_string(&text, "mqtt", "device_name")
+                    .unwrap_or_else(|| "Tempeh Controller".to_string()),
+                home_assistant_discovery: read_toml_bool(
+                    &text,
+                    "mqtt",
+                    "home_assistant_discovery",
+                    true,
+                ),
+            }),
             probes: ProbeConfig {
-                box_air: read_toml_bool(&text, "box_air", true),
-                room_air: read_toml_bool(&text, "room_air", false),
-                product: read_toml_bool(&text, "product", true),
+                box_air: read_toml_bool(&text, "probes", "box_air", true),
+                room_air: read_toml_bool(&text, "probes", "room_air", false),
+                product: read_toml_bool(&text, "probes", "product", true),
             },
         })
     }
 }
 
-fn read_toml_bool(text: &str, key: &str, default: bool) -> bool {
-    let prefix = format!("{key} =");
-
-    text.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .filter(|line| !line.starts_with('#'))
-        .find_map(|line| {
-            let value = line.strip_prefix(&prefix)?.trim();
-            Some(match value {
-                "true" => true,
-                "false" => false,
-                _ => default,
-            })
-        })
-        .unwrap_or(default)
+fn read_toml_bool(text: &str, section: &str, key: &str, default: bool) -> bool {
+    match read_toml_value(text, section, key) {
+        Some("true") => true,
+        Some("false") => false,
+        _ => default,
+    }
 }
 
-fn read_toml_string(text: &str, key: &str) -> Option<String> {
-    let prefix = format!("{key} =");
+fn read_toml_string(text: &str, section: &str, key: &str) -> Option<String> {
+    let value = read_toml_value(text, section, key)?;
+    Some(value.strip_prefix('"')?.strip_suffix('"')?.to_string())
+}
 
-    text.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .filter(|line| !line.starts_with('#'))
-        .find_map(|line| {
-            let value = line.strip_prefix(&prefix)?.trim();
-            let value = value.strip_prefix('"')?.strip_suffix('"')?;
-            Some(value.to_string())
-        })
+fn read_toml_value<'a>(text: &'a str, section: &str, key: &str) -> Option<&'a str> {
+    let prefix = format!("{key} =");
+    let mut current_section = None;
+
+    for line in text.lines().map(str::trim) {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some(name) = line
+            .strip_prefix('[')
+            .and_then(|line| line.strip_suffix(']'))
+        {
+            current_section = Some(name.trim());
+            continue;
+        }
+        if current_section != Some(section) {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix(&prefix) {
+            return Some(value.trim());
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -133,8 +186,14 @@ mod tests {
             password = "secret"
         "#;
 
-        assert_eq!(read_toml_string(text, "ssid"), Some("tempeh-net".into()));
-        assert_eq!(read_toml_string(text, "password"), Some("secret".into()));
+        assert_eq!(
+            read_toml_string(text, "wifi", "ssid"),
+            Some("tempeh-net".into())
+        );
+        assert_eq!(
+            read_toml_string(text, "wifi", "password"),
+            Some("secret".into())
+        );
     }
 
     #[test]
@@ -145,9 +204,9 @@ mod tests {
             room_air = false
         "#;
 
-        assert!(read_toml_bool(text, "box_air", false));
-        assert!(!read_toml_bool(text, "room_air", true));
-        assert!(read_toml_bool(text, "product", true));
+        assert!(read_toml_bool(text, "probes", "box_air", false));
+        assert!(!read_toml_bool(text, "probes", "room_air", true));
+        assert!(read_toml_bool(text, "probes", "product", true));
     }
 
     #[test]
@@ -162,8 +221,30 @@ mod tests {
         "#;
 
         assert_eq!(
-            read_toml_string(text, "base_url"),
+            read_toml_string(text, "tasmota", "base_url"),
             Some("http://192.0.2.10".into())
+        );
+    }
+
+    #[test]
+    fn reads_mqtt_credentials_from_the_mqtt_section() {
+        let text = r#"
+            [wifi]
+            password = "wifi-secret"
+
+            [mqtt]
+            broker_url = "mqtt://192.0.2.20:1883"
+            username = "tempeh"
+            password = "mqtt-secret"
+        "#;
+
+        assert_eq!(
+            read_toml_string(text, "mqtt", "password"),
+            Some("mqtt-secret".into())
+        );
+        assert_eq!(
+            read_toml_string(text, "wifi", "password"),
+            Some("wifi-secret".into())
         );
     }
 }

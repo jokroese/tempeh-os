@@ -125,7 +125,12 @@ control,time_s,room_air_temp_c,box_air_temp_c,product_temp_c,heater_on,reason
 control,1,,22.437,23.125,1,below_target
 ```
 
-The firmware actuates the configured Tasmota plug directly. The laptop is optional and can monitor `temp`, `control`, `state`, and `actuator` records over USB serial.
+The firmware actuates the configured Tasmota plug directly. The laptop is optional
+and can monitor `temp`, `control`, `state`, and `actuator` records over USB serial.
+Optionally, the firmware publishes generic read-only MQTT telemetry, with Home
+Assistant discovery as a separate adapter. MQTT remains outside the heater control
+and safety path. See the
+[firmware setup](crates/tempeh-firmware-esp32/README.md#mqtt-telemetry).
 
 ## Real control smoke test
 

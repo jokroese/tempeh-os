@@ -9,3 +9,12 @@ base_url = "http://192.0.2.10"
 box_air = true
 room_air = false
 product = true
+
+# Uncomment to publish generic read-only MQTT telemetry.
+# [mqtt]
+# broker_url = "mqtt://192.0.2.20:1883"
+# username = "tempeh-controller"
+# password = "replace-with-a-dedicated-mqtt-password"
+# device_id = "tempeh_controller"
+# device_name = "Tempeh Controller"
+# home_assistant_discovery = true

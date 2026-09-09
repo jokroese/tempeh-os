@@ -184,6 +184,23 @@ ESP32 probes
 
 The laptop is optional. It remains useful for logs, charts, and debugging, but is not required to keep a supervised run active.
 
+Optional observability follows a separate, one-way path:
+
+```text
+RunSupervisor + latest probes + HeaterLease
+  -> generic retained MQTT availability and state
+  -> optional Home Assistant discovery adapter
+  -> Home Assistant Recorder, Node-RED, openHAB, or another consumer
+```
+
+MQTT is not part of the control path. Broker failure, Home Assistant failure, and
+telemetry backpressure must not change supervisor state or delay lease renewal.
+The firmware uses the ESP-IDF MQTT outbox rather than performing broker network
+I/O synchronously in the safety loop. The MQTT topic and JSON payload contract lives
+in `tempeh-protocol::mqtt`; `tempeh-protocol::home_assistant` only describes that
+contract using Home Assistant discovery. Control topics are deliberately out of
+scope for this read-only slice.
+
 The selected actuator boundary is:
 
 ```text
