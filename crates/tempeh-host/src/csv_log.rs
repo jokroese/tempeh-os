@@ -17,7 +17,10 @@ impl CsvLog {
                 fs::create_dir_all(parent)?;
             }
         }
-        let file = File::create(&path)?;
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
         let mut writer = BufWriter::new(file);
         writeln!(writer, "{header}")?;
         writer.flush()?;

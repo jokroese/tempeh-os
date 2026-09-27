@@ -126,11 +126,34 @@ control,1,,22.437,23.125,1,below_target
 ```
 
 The firmware actuates the configured Tasmota plug directly. The laptop is optional
-and can monitor `temp`, `control`, `state`, and `actuator` records over USB serial.
+and can monitor `temp`, `control`, `state`, `actuator`, and periodic `status` records
+over USB serial.
 Optionally, the firmware publishes generic read-only MQTT telemetry, with Home
 Assistant discovery as a separate adapter. MQTT remains outside the heater control
 and safety path. See the
 [firmware setup](crates/tempeh-firmware-esp32/README.md#mqtt-telemetry).
+
+## Monitor faults and keep serial evidence
+
+Run `just monitor <port>` (or `cargo run -p tempeh-host -- monitor <port>`)
+and open `http://127.0.0.1:8787`. Monitor mode only observes the autonomous
+controller; it does not send Tasmota commands. To replay a serial fixture without
+hardware, use `cargo run -p tempeh-host -- monitor - <csv-path>` and pipe the
+fixture into stdin.
+
+The browser separates **heat requested** from **plug confirmation**. Confirmation
+means a Tasmota command reply, not a live relay measurement. Firmware limits its
+reporting validity to one lease duration (normally 20 seconds); an expired or
+failed confirmation is **unknown**, even when the last successful reply said ON
+or OFF. Temperatures and confirmations show their ages. ESP32 serial activity and
+periodic controller status become **stale** after 10 seconds without new input.
+
+Every run writes the existing control CSV and a sibling
+`<csv-stem>.serial.jsonl` file containing all serial lines, including warnings
+and records that the monitor cannot parse. Both files are flushed as data arrives.
+If the LED turns red, check the browser's fault reason and recent diagnostics,
+then search the capture for `state,`, `actuator,`, `failed`, and `WARN`. Keep the
+capture from before resetting the ESP32; a reset clears its current fault state.
 
 ## Real control smoke test
 

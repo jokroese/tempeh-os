@@ -2,7 +2,7 @@ use std::env;
 use std::fs;
 use std::io::{self, BufRead, BufReader};
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -11,13 +11,14 @@ use std::time::{Duration, Instant};
 use tempeh_control::{ControlReading, Controller, Heater, run_trace_control};
 use tempeh_model::{EnvironmentState, TemperatureReading};
 use tempeh_pet::{PetEvent, PetReport, format_event_time, report_for_samples};
-use tempeh_protocol::{parse_control_line, parse_temperature_line};
+use tempeh_protocol::parse_temperature_line;
 use tempeh_runtime::{LatestTemperatureReadings, RealRunConfig, RealRunController, RealRunSample};
 use tempeh_sim::{SimConfig, Simulator, TemperatureTrace};
 
 use crate::csv_log::CsvLog;
 use crate::live_ui::{LiveAppState, SharedLiveAppState, spawn_live_server};
 use crate::ports::list_serial_ports;
+use crate::serial_capture::SerialCapture;
 use crate::tasmota::{TasmotaHeater, run_plug_test, run_trace_control_test, tasmota_base_url};
 
 const DEFAULT_SERIAL_BAUD: u32 = 115_200;
@@ -80,7 +81,7 @@ pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
 
 fn print_help() {
     eprintln!(
-        "Usage:\n  cargo run -p tempeh-host -- html                                   # write out/sim.html\n  cargo run -p tempeh-host -- csv                                    # print simulation CSV\n  cargo run -p tempeh-host -- control                                # print simulated control-loop CSV\n  cargo run -p tempeh-host -- pet                                    # print the mycelial pet status\n  cargo run -p tempeh-host -- ports                                  # recommend likely ESP32 serial port\n  cargo run -p tempeh-host -- ports --all                            # list all available serial ports\n  cargo run -p tempeh-host -- plug-test <url>                        # turn Tasmota plug on, wait, turn off\n  cargo run -p tempeh-host -- trace-control-test <url>               # drive Tasmota plug from a short fake temperature trace\n  cargo run -p tempeh-host -- thermometer-test <port|->              # read labelled temperature lines from serial or stdin\n  cargo run -p tempeh-host -- real-control-test <port> <url> [csv]   # read real probe, drive plug, save CSV\n  cargo run -p tempeh-host -- real-control-live <port> <url> [csv]   # real control plus live web UI\n  cargo run -p tempeh-host -- monitor <port> [csv]                   # read firmware control output, save CSV, serve live UI\n\nShortcuts:\n  just monitor <port> [csv]\n\nEnvironment:\n  TEMPEH_TASMOTA_URL=http://192.168.1.50"
+        "Usage:\n  cargo run -p tempeh-host -- html                                   # write out/sim.html\n  cargo run -p tempeh-host -- csv                                    # print simulation CSV\n  cargo run -p tempeh-host -- control                                # print simulated control-loop CSV\n  cargo run -p tempeh-host -- pet                                    # print the mycelial pet status\n  cargo run -p tempeh-host -- ports                                  # recommend likely ESP32 serial port\n  cargo run -p tempeh-host -- ports --all                            # list all available serial ports\n  cargo run -p tempeh-host -- plug-test <url>                        # turn Tasmota plug on, wait, turn off\n  cargo run -p tempeh-host -- trace-control-test <url>               # drive Tasmota plug from a short fake temperature trace\n  cargo run -p tempeh-host -- thermometer-test <port|->              # read labelled temperature lines from serial or stdin\n  cargo run -p tempeh-host -- real-control-test <port> <url> [csv]   # read real probe, drive plug, save CSV\n  cargo run -p tempeh-host -- real-control-live <port> <url> [csv]   # real control plus live web UI\n  cargo run -p tempeh-host -- monitor <port|-> [csv]                 # watch faults and temperatures, save CSV and serial evidence\n\nShortcuts:\n  just monitor <port> [csv]\n\nEnvironment:\n  TEMPEH_TASMOTA_URL=http://192.168.1.50"
     );
 }
 
@@ -1044,16 +1045,30 @@ fn run_monitor_live(
         )
     })?;
     let csv_path = csv_arg.unwrap_or_else(default_monitor_csv_path);
+    let csv_file = PathBuf::from(&csv_path);
+    let capture_file = csv_file.with_extension("serial.jsonl");
+    if csv_file.exists() || capture_file.exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "monitor CSV or serial capture already exists",
+        )
+        .into());
+    }
     let addr: SocketAddr = DEFAULT_LIVE_ADDR.parse()?;
 
-    let port = serialport::new(&source, DEFAULT_SERIAL_BAUD)
-        .timeout(Duration::from_millis(2_000))
-        .open()
-        .map_err(|error| {
-            std::io::Error::other(format!(
-                "failed to open serial port {source} at {DEFAULT_SERIAL_BAUD} baud: {error}"
-            ))
-        })?;
+    let reader: Box<dyn BufRead> = if source == "-" {
+        Box::new(BufReader::new(io::stdin()))
+    } else {
+        let port = serialport::new(&source, DEFAULT_SERIAL_BAUD)
+            .timeout(Duration::from_millis(2_000))
+            .open()
+            .map_err(|error| {
+                std::io::Error::other(format!(
+                    "failed to open serial port {source} at {DEFAULT_SERIAL_BAUD} baud: {error}"
+                ))
+            })?;
+        Box::new(BufReader::new(port))
+    };
 
     let stop_requested = Arc::new(AtomicBool::new(false));
     {
@@ -1067,13 +1082,19 @@ fn run_monitor_live(
     }
 
     let header = RealRunSample::csv_header();
+    let mut capture = SerialCapture::create(&csv_file)?;
     let mut csv_log = CsvLog::create(&csv_path, header)?;
-    let live_state = Arc::new(LiveAppState::new(csv_path.clone()));
+    let live_state = Arc::new(LiveAppState::new_monitor(csv_path.clone()));
+    live_state.set_capture_path(capture.path().display().to_string());
     let server_handle = spawn_live_server(Arc::clone(&live_state), addr);
 
     eprintln!("Starting live monitor.");
     eprintln!("Reading control output from {source} at {DEFAULT_SERIAL_BAUD} baud.");
     eprintln!("Saving data to {csv_path}.");
+    eprintln!(
+        "Saving complete serial evidence to {}.",
+        capture.path().display()
+    );
     eprintln!("Live UI: http://{addr}");
     eprintln!("No heater control is active in monitor mode.");
     eprintln!("Press Ctrl-C to stop.");
@@ -1093,12 +1114,20 @@ fn run_monitor_live(
     }
 
     run_monitor_live_loop(
-        BufReader::new(port),
+        reader,
         Arc::clone(&stop_requested),
         header,
         &mut csv_log,
         Arc::clone(&live_state),
+        &mut capture,
     )?;
+
+    if !stop_requested.load(Ordering::SeqCst) {
+        eprintln!("Serial connection closed; live status remains available until Ctrl-C.");
+        while !stop_requested.load(Ordering::SeqCst) {
+            thread::sleep(Duration::from_millis(200));
+        }
+    }
 
     eprintln!("Live monitor stopped.");
     Ok(())
@@ -1199,12 +1228,15 @@ fn run_monitor_live_loop<R>(
     header: &str,
     csv_log: &mut CsvLog,
     live_state: SharedLiveAppState,
+    capture: &mut SerialCapture,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
     R: BufRead,
 {
     let mut line = String::new();
     let mut printed_header = false;
+    let mut capture_ok = true;
+    let mut printed_fault: Option<String> = None;
 
     while !stop_requested.load(Ordering::SeqCst) {
         line.clear();
@@ -1217,18 +1249,78 @@ where
             {
                 continue;
             }
-            Err(error) => return Err(error.into()),
+            Err(error) => {
+                let now_s = live_state.now_s();
+                record_capture_event(
+                    capture,
+                    &live_state,
+                    &mut capture_ok,
+                    now_s,
+                    "connection",
+                    &error.to_string(),
+                );
+                live_state.serial_disconnected(now_s);
+                eprintln!("ESP32 serial connection failed: {error}");
+                break;
+            }
         };
 
         if bytes == 0 {
+            let now_s = live_state.now_s();
+            record_capture_event(
+                capture,
+                &live_state,
+                &mut capture_ok,
+                now_s,
+                "connection",
+                "serial connection closed",
+            );
+            live_state.serial_disconnected(now_s);
             break;
         }
 
-        let control = match parse_control_line(&line) {
+        let now_s = live_state.now_s();
+        if capture_ok {
+            if let Err(error) = capture.line(now_s, &line) {
+                capture_ok = false;
+                eprintln!("Serial evidence recording failed: {error}");
+                live_state.capture_failed(error.to_string());
+            }
+        }
+        if line.starts_with("state,")
+            || line.starts_with("actuator,")
+            || (!line.starts_with("status,")
+                && (line.contains("WARN") || line.contains("ERROR") || line.contains("failed")))
+        {
+            eprintln!("{}", line.trim_end());
+        }
+        let parsed = live_state.ingest_serial(&line, now_s);
+        if line.starts_with("state,") {
+            printed_fault = live_state.monitor_snapshot(now_s).fault_reason;
+        } else if line.starts_with("status,") && parsed.is_ok() {
+            let fault = live_state.monitor_snapshot(now_s).fault_reason;
+            if fault != printed_fault {
+                if let Some(reason) = fault.as_deref() {
+                    eprintln!("Controller fault: {reason}");
+                }
+                printed_fault = fault;
+            }
+        }
+        let control = match parsed {
             Ok(Some(control)) => control,
             Ok(None) => continue,
             Err(error) => {
-                eprintln!("Ignoring invalid control line {:?}: {error:?}", line.trim());
+                let message = format!("Invalid serial record {:?}: {error}", line.trim());
+                eprintln!("{message}");
+                live_state.monitor_event(now_s, "parse", &message);
+                record_capture_event(
+                    capture,
+                    &live_state,
+                    &mut capture_ok,
+                    now_s,
+                    "parse",
+                    &message,
+                );
                 continue;
             }
         };
@@ -1267,6 +1359,23 @@ where
     }
 
     Ok(())
+}
+
+fn record_capture_event(
+    capture: &mut SerialCapture,
+    live_state: &LiveAppState,
+    capture_ok: &mut bool,
+    now_s: f32,
+    kind: &str,
+    message: &str,
+) {
+    if *capture_ok {
+        if let Err(error) = capture.event(now_s, kind, message) {
+            *capture_ok = false;
+            eprintln!("Serial evidence recording failed: {error}");
+            live_state.capture_failed(error.to_string());
+        }
+    }
 }
 
 fn default_real_control_csv_path() -> String {
