@@ -141,14 +141,14 @@ fn main() -> Result<()> {
             lease.record_success(0.0, false);
             supervisor.report_actuator_ready();
             println!("{}", format_state_line(0.0, "idle", "boot_configured"));
-            print_actuator_line(0.0, &lease, "boot_configured");
+            print_actuator_line(elapsed_s(start_us), &lease, "boot_configured");
         }
         Err(error) => {
             warn!("Tasmota boot configuration failed: {error:#}");
             lease.record_failure(0.0);
             let outcome = supervisor.report_fault(FaultReason::BootConfigFailed);
             print_supervisor_outcome(0.0, &outcome);
-            print_actuator_line(0.0, &lease, "boot_config_failed");
+            print_actuator_line(elapsed_s(start_us), &lease, "boot_config_failed");
         }
     }
 
@@ -226,12 +226,12 @@ fn main() -> Result<()> {
                     lease.record_success(time_s, false);
                     supervisor.report_actuator_ready();
                     info!("Tasmota actuator recovered; fault acknowledgement is now permitted");
-                    print_actuator_line(time_s, &lease, "actuator_recovered");
+                    print_actuator_line(elapsed_s(start_us), &lease, "actuator_recovered");
                 }
                 Err(error) => {
                     warn!("Tasmota actuator recovery failed: {error:#}");
                     lease.record_failure(time_s);
-                    print_actuator_line(time_s, &lease, "actuator_recovery_failed");
+                    print_actuator_line(elapsed_s(start_us), &lease, "actuator_recovery_failed");
                 }
             }
         }
@@ -299,15 +299,22 @@ fn main() -> Result<()> {
         }
 
         lease.set_desired(supervisor.desired_heater_on(), time_s);
-        run_heater_lease(time_s, &mut lease, &mut heater_output, &mut supervisor);
+        run_heater_lease(
+            time_s,
+            start_us,
+            &mut lease,
+            &mut heater_output,
+            &mut supervisor,
+        );
         show_status(&mut status_led, supervisor.state());
+        let report_time_s = elapsed_s(start_us);
         if let Some(mqtt) = mqtt.as_mut() {
             mqtt.poll(
-                time_s,
+                report_time_s,
                 &latest,
                 supervisor.state(),
                 supervisor.desired_heater_on(),
-                lease.confirmed_heater_on(),
+                lease.current_confirmation(report_time_s),
                 supervisor.actuator_ready(),
             );
         }
@@ -433,6 +440,7 @@ fn finish_probe_conversion(
 
 fn run_heater_lease(
     time_s: f32,
+    start_us: i64,
     lease: &mut HeaterLease,
     heater_output: &mut TasmotaHeaterOutput,
     supervisor: &mut RunSupervisor,
@@ -451,7 +459,7 @@ fn run_heater_lease(
     match heater_output.set_heater(on, success_reason) {
         Ok(()) => {
             lease.record_success(time_s, on);
-            print_actuator_line(time_s, lease, success_reason);
+            print_actuator_line(elapsed_s(start_us), lease, success_reason);
         }
         Err(error) => {
             warn!("Tasmota heater command failed: {error:#}");
@@ -460,7 +468,7 @@ fn run_heater_lease(
             }
 
             lease.record_failure(time_s);
-            print_actuator_line(time_s, lease, failure_reason);
+            print_actuator_line(elapsed_s(start_us), lease, failure_reason);
             let outcome = supervisor.report_fault(FaultReason::ActuatorFailed);
             print_supervisor_outcome(time_s, &outcome);
             lease.set_desired(false, time_s);
@@ -496,7 +504,7 @@ fn print_actuator_line(time_s: f32, lease: &HeaterLease, reason: &str) {
         format_actuator_line(
             time_s,
             lease.desired_heater_on(),
-            lease.confirmed_heater_on(),
+            lease.current_confirmation(time_s),
             reason,
         )
     );
