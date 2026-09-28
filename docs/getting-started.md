@@ -311,5 +311,5 @@ ready, then follow that procedure for cooling, cooking or storage.
 
 The Nologo ESP32-S3 SuperMini is the current hands-on development board.
 Alternative boards, probes, enclosures and heaters need the relevant smoke
-check or warm-up. See [development.md](development.md) for simulation, serial
+check or warm-up. See [development.md](development.md) for serial
 protocol and monitoring commands.

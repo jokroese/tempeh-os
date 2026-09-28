@@ -5,9 +5,6 @@ edition.workspace = true
 
 [dependencies]
 tempeh-model.workspace = true
-tempeh-sim.workspace = true
-tempeh-control.workspace = true
-tempeh-pet.workspace = true
 tempeh-runtime.workspace = true
 tempeh-protocol = { workspace = true, features = ["status-parse"] }
 serialport.workspace = true

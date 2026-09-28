@@ -1,9 +1,9 @@
 # Development Guide
 
 The current hands-on controller is the Nologo ESP32-S3 SuperMini. The production
-direction is autonomous ESP32 control; the laptop host provides simulation,
-diagnostics and monitoring. The DevKitC-1 is a later reference target, not the
-board currently validated in practice.
+direction is autonomous ESP32 control; the laptop host provides diagnostics and
+monitoring. The DevKitC-1 is a later reference target, not the board currently
+validated in practice.
 
 ## Repository structure
 
@@ -12,9 +12,7 @@ board currently validated in practice.
 - `tempeh-runtime` owns real-run safety, supervision and heater policy.
 - `tempeh-protocol` owns serial and MQTT protocols.
 - `tempeh-firmware-esp32` owns autonomous probe reading and actuation.
-- `tempeh-host` owns simulation, serial diagnostics, logging and the live UI.
-- `tempeh-sim` owns the approximate fermentation simulation.
-- `tempeh-pet` translates simulated state into experimental narrative status.
+- `tempeh-host` owns serial diagnostics, logging and the live UI.
 
 See [architecture.md](architecture.md) for dependency boundaries and safety
 invariants.
@@ -33,14 +31,7 @@ cargo run -p tempeh-host -- monitor /dev/cu.usbmodem1234561
 
 # Read raw temperature records without controlling heat
 cargo run -p tempeh-host -- thermometer-test /dev/cu.usbmodem1234561
-
-# Generate the approximate simulation report
-cargo run -p tempeh-host -- html
 ```
-
-Simulation-only commands are `html`, `csv`, `control` and `pet`. The pet's
-progress and readiness estimate are generated from the approximate simulation;
-they do not describe a real food batch.
 
 ## Monitor faults and keep serial evidence
 
@@ -67,19 +58,6 @@ capture from before resetting the ESP32; a reset clears its current fault state.
 Stopping a host monitor only closes the laptop tool. It never stops an
 autonomous controller or cancels a plug lease; use the ESP32 BOOT button to
 stop a run.
-
-## Simulation
-
-```bash
-cargo run -p tempeh-host -- html
-open out/sim.html
-cargo run -p tempeh-host -- csv
-cargo run -p tempeh-host -- control
-cargo run -p tempeh-host -- pet
-```
-
-The simulation is intentionally approximate and supports policy exploration; it
-is not a calibrated model of food safety or batch readiness.
 
 ## Firmware
 

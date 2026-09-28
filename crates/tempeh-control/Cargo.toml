@@ -5,4 +5,3 @@ edition.workspace = true
 
 [dependencies]
 tempeh-model.workspace = true
-tempeh-sim.workspace = true

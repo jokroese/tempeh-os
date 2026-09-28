@@ -38,7 +38,7 @@ parts, wiring, installation and practical first-build checks.
 For an existing, tested incubator, use the **[operating and troubleshooting
 guide](docs/operating.md)** for each batch, normal stopping and faults.
 
-For simulations, serial diagnostics and engineering experiments, use the
+For serial diagnostics and engineering work, use the
 **[development guide](docs/development.md)**.
 
 ## Current controller wiring
@@ -101,7 +101,7 @@ path.
 
 ## Development
 
-Simulation, firmware build details and repository structure are documented in
+Firmware build details and repository structure are documented in
 [the development guide](docs/development.md). The host tools do not actuate the
 plug; the ESP32 is the only supported heater controller.
 

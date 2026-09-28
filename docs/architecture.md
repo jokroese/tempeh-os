@@ -4,7 +4,7 @@ Tempeh OS is a Rust workspace for modelling, observing, and controlling a low-co
 
 The design goal is to keep domain logic shared and hardware adapters explicit:
 
-- pure crates describe vocabulary, control policy, simulation, and text protocols;
+- pure crates describe vocabulary, control policy and text protocols;
 - host code owns laptop-side adapters such as serial ports, CSV files and the live UI;
 - firmware code owns ESP32-side adapters such as GPIO, DS18B20 probes and heater output.
 
@@ -17,7 +17,6 @@ Owns shared domain vocabulary.
 It defines common data types such as:
 
 - `ControllerConfig`
-- `EnvironmentState`
 - `TemperatureProbe`
 - `TemperatureReading`
 
@@ -27,7 +26,7 @@ This crate should stay small and dependency-light. It is the common language use
 
 Owns generic control primitives.
 
-It contains the basic hysteresis controller and simple test adapters used for simulated control runs.
+It contains the basic hysteresis controller used by the firmware runtime.
 
 It should not know about:
 
@@ -81,20 +80,6 @@ temp,product,23.125
 ```
 
 Both firmware and host should use this crate rather than hand-rolling protocol strings or parsers.
-
-### `tempeh-sim`
-
-Owns simulation.
-
-The simulator is intentionally approximate. Its job is to support thinking, visualisation, and policy experiments, not to be a calibrated thermal model.
-
-### `tempeh-pet`
-
-Owns the mycelial status report.
-
-This crate translates simulated state into friendly batch status, milestones, readiness estimates, and pet-like messaging.
-
-It is a presentation/domain-narrative crate, not a hardware control crate.
 
 ### `tempeh-host`
 

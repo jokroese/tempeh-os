@@ -1,7 +1,0 @@
-[package]
-name = "tempeh-sim"
-version.workspace = true
-edition.workspace = true
-
-[dependencies]
-tempeh-model.workspace = true
