@@ -20,7 +20,15 @@ firmware-deps:
       echo "firmware dependency graph must not include host HTTP/TLS crates" >&2; \
       exit 1; \
     fi
-check: fmt test help smoke-stdin firmware-deps
+check: fmt test help smoke-stdin firmware-deps mqtt-helper-test
+mqtt-setup lan_ip:
+    python3 scripts/mqtt_local.py setup {{lan_ip}}
+mqtt-broker:
+    python3 scripts/mqtt_local.py broker
+mqtt-helper-test:
+    python3 -m unittest discover -s tests -p 'test_mqtt_local.py'
+mqtt-broker-test:
+    python3 -m unittest discover -s tests -p 'test_mqtt_broker.py'
 firmware-env := "ESP_IDF_SYS_ROOT_CRATE=tempeh-firmware-esp32"
 firmware-local:
     test -f crates/tempeh-firmware-esp32/firmware.local.toml || { echo "create crates/tempeh-firmware-esp32/firmware.local.toml first" >&2; exit 1; }

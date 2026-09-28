@@ -8,3 +8,5 @@ repomix.config.json
 repomix-output.xml
 
 .embuild
+
+__pycache__/

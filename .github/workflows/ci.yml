@@ -17,8 +17,12 @@ env:
 
 jobs:
   host:
-    name: Host workspace checks
-    runs-on: ubuntu-latest
+    name: Host workspace checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
 
     steps:
       - name: Checkout
@@ -36,11 +40,18 @@ jobs:
 
       - name: Install system dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libudev-dev \
-            pkg-config \
-            ripgrep
+          if [ "$RUNNER_OS" = Linux ]; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends \
+              libudev-dev \
+              mosquitto \
+              mosquitto-clients \
+              pkg-config \
+              ripgrep
+          else
+            brew install mosquitto ripgrep
+            echo "$(brew --prefix mosquitto)/sbin" >> "$GITHUB_PATH"
+          fi
 
       - name: Install just
         uses: taiki-e/install-action@v2
@@ -49,3 +60,6 @@ jobs:
 
       - name: Check
         run: just check
+
+      - name: Test local MQTT broker
+        run: just mqtt-broker-test

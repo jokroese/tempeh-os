@@ -101,8 +101,9 @@ ESPFLASH_PORT=/dev/cu.usbmodem1234561 cargo run --release
 
 ### MQTT telemetry
 
-MQTT telemetry is optional and read-only. Configure a broker and uncomment this
-section in `firmware.local.toml`:
+MQTT telemetry is optional and read-only. For a small local broker and viewer
+without Home Assistant, follow [Watch your incubator over Wi-Fi](../../docs/mqtt-explorer.md).
+Configure a broker and uncomment this section in `firmware.local.toml`:
 
 ```toml
 [mqtt]
@@ -111,7 +112,7 @@ username = "tempeh-controller"
 password = "replace-with-a-dedicated-mqtt-password"
 device_id = "tempeh_controller"
 device_name = "Tempeh Controller"
-home_assistant_discovery = true
+home_assistant_discovery = false
 ```
 
 Prefer the broker's fixed local IP address. `device_id` must contain only lower-case
@@ -134,7 +135,7 @@ with:
 - actuator readiness;
 - controller uptime.
 
-Set `home_assistant_discovery = false` to use only these generic MQTT topics.
+`home_assistant_discovery = false` uses only these generic MQTT topics.
 
 #### Home Assistant discovery
 
@@ -150,33 +151,35 @@ state changes. The broker receives an `offline` Last Will if the connection is l
 MQTT connection and publishing failures are diagnostic only: they cannot start,
 stop, fault, or delay the local heating supervisor.
 
-Expected serial log after a successful connection includes:
+Expected serial log after a successful generic connection includes:
 
 ```text
-MQTT telemetry starting: broker=mqtt://192.0.2.20:1883, device_id=tempeh_controller, home_assistant_discovery=true
+MQTT telemetry starting: broker=mqtt://192.0.2.20:1883, device_id=tempeh_controller, home_assistant_discovery=false
 MQTT connected
-Home Assistant MQTT discovery published
 ```
 
 If the `[mqtt]` section is absent, MQTT telemetry is disabled and firmware otherwise
 behaves exactly as before.
 
-#### MQTT acceptance check
+#### Generic MQTT acceptance check
 
 Keep the heat mat disconnected for this check.
 
-1. Flash with the MQTT section configured and confirm all three expected connection
+1. Flash with the MQTT section configured and confirm both expected connection
    messages appear over serial.
 2. Subscribe to `tempeh/tempeh_controller/#` and confirm retained `availability`
    and JSON `state` messages arrive without the laptop serial monitor remaining open.
-3. In Home Assistant, confirm one Tempeh Controller device appears with only the
-   enabled probe entities.
-4. Start and stop a run locally. Confirm run state, heater demand, and confirmed
+3. Start and stop a run locally. Confirm run state, heater demand, and confirmed
    heater values follow the physical controller.
-5. Stop only the MQTT broker. Confirm the ESP32 continues its local control and
+4. Stop only the MQTT broker. Confirm the ESP32 continues its local control and
    Tasmota lease behaviour unchanged.
-6. Restart the broker. Confirm MQTT reconnects, republishes discovery and current
-   state, and Home Assistant marks the device available again.
+5. Restart the broker. Confirm MQTT reconnects and republishes current state.
+
+#### Home Assistant acceptance check
+
+With `home_assistant_discovery = true`, confirm one Tempeh Controller device
+appears with only the enabled probe entities. On broker restart, confirm the
+firmware republishes discovery and Home Assistant marks the device available.
 
 At boot, firmware requires Tasmota to confirm all three safety settings before a run can start:
 
