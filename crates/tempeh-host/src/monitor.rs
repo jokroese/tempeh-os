@@ -66,21 +66,6 @@ pub(crate) struct MonitorState {
 }
 
 impl MonitorState {
-    pub(crate) fn host_sample(
-        &mut self,
-        now_s: f32,
-        room_air: Option<f32>,
-        box_air: f32,
-        product: Option<f32>,
-        desired: bool,
-    ) {
-        self.run_state = Some("host control".into());
-        self.desired = Some(desired);
-        self.room_air = room_air.map(|value| (value, now_s));
-        self.box_air = Some((box_air, now_s));
-        self.product = product.map(|value| (value, now_s));
-    }
-
     pub(crate) fn segment(&self) -> u64 {
         self.segment
     }
@@ -314,7 +299,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_state_recovery_and_reboot_do_not_reuse_old_faults() {
+    fn state_recovery_and_reboot_do_not_reuse_old_faults() {
         let mut monitor = MonitorState::default();
         monitor.ingest("state,4,fault,product_stale", 4.0).unwrap();
         monitor

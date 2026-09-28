@@ -34,7 +34,6 @@ struct LiveSample {
 
 #[derive(Debug, Clone, Serialize)]
 struct LiveStatus {
-    mode: &'static str,
     csv_path: String,
     sample_count: usize,
     retained_sample_count: usize,
@@ -47,7 +46,6 @@ struct LiveStatus {
 
 #[derive(Debug)]
 struct LiveRunState {
-    mode: &'static str,
     csv_path: String,
     samples: VecDeque<LiveSample>,
     next_seq: u64,
@@ -60,7 +58,6 @@ impl LiveRunState {
     fn new(csv_path: impl Into<String>) -> Self {
         Self {
             csv_path: csv_path.into(),
-            mode: "host_control",
             samples: VecDeque::with_capacity(LIVE_RING_CAPACITY),
             next_seq: 1,
             monitor: MonitorState::default(),
@@ -109,7 +106,6 @@ impl LiveRunState {
 
     fn status(&self, now_s: f32) -> LiveStatus {
         LiveStatus {
-            mode: self.mode,
             csv_path: self.csv_path.clone(),
             sample_count: self.next_seq.saturating_sub(1) as usize,
             retained_sample_count: self.samples.len(),
@@ -137,12 +133,6 @@ impl LiveAppState {
             events,
             started: Instant::now(),
         }
-    }
-
-    pub(crate) fn new_monitor(csv_path: impl Into<String>) -> Self {
-        let state = Self::new(csv_path);
-        state.run.lock().expect("live state mutex poisoned").mode = "monitor";
-        state
     }
 
     pub(crate) fn now_s(&self) -> f32 {
@@ -210,15 +200,6 @@ impl LiveAppState {
         let sample = {
             let mut run = self.run.lock().expect("live state mutex poisoned");
             let now_s = self.now_s();
-            if run.mode == "host_control" {
-                run.monitor.host_sample(
-                    now_s,
-                    room_air_temp_c,
-                    box_air_temp_c,
-                    product_temp_c,
-                    heater_on,
-                );
-            }
             run.push(
                 time_s,
                 room_air_temp_c,

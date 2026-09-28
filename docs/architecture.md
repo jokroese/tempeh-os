@@ -5,8 +5,8 @@ Tempeh OS is a Rust workspace for modelling, observing, and controlling a low-co
 The design goal is to keep domain logic shared and hardware adapters explicit:
 
 - pure crates describe vocabulary, control policy, simulation, and text protocols;
-- host code owns laptop-side adapters such as serial ports, CSV files, HTTP, and the live UI;
-- firmware code owns ESP32-side adapters such as GPIO, DS18B20 probes, and eventually heater output.
+- host code owns laptop-side adapters such as serial ports, CSV files and the live UI;
+- firmware code owns ESP32-side adapters such as GPIO, DS18B20 probes and heater output.
 
 ## Crate responsibilities
 
@@ -104,12 +104,11 @@ This crate contains:
 
 - CLI routing;
 - serial-port reading;
-- Tasmota HTTP heater adapter;
 - CSV logging;
 - local live web UI;
 - serial port discovery.
 
-The host can currently actuate the Tasmota plug. It does this by reading firmware `temp,...` lines, applying `tempeh-runtime`, and sending HTTP commands to the plug.
+The host observes firmware serial output and never actuates the plug.
 
 ### `tempeh-firmware-esp32`
 
@@ -127,24 +126,7 @@ This crate currently:
 
 ## Current control boundary
 
-The autonomous firmware-evaluated path is the product direction. The older
-host-actuated path remains only for controlled engineering experiments.
-
-### Legacy host-actuated experiments
-
-```text
-ESP32 probes
-  -> temp,... serial lines
-  -> tempeh-host
-  -> tempeh-runtime
-  -> Tasmota HTTP plug command
-```
-
-This remains useful for deliberate host-driven experiments. It is not the
-recommended incubation path and must not run concurrently with autonomous
-actuation.
-
-### Primary autonomous control
+The ESP32 firmware is the only heater controller.
 
 ```text
 ESP32 probes and button
@@ -166,7 +148,7 @@ Any heater-actuating implementation must preserve these invariants:
 - the heater returns off on reset or panic where possible;
 - missing `box_air` means no heat;
 - stale `box_air` means no heat;
-- `product` may be absent for experiments;
+- `product` is optional;
 - once `product` has been seen, stale `product` means no heat;
 - product hard cutoff means no heat;
 - box-air hard cutoff means no heat;

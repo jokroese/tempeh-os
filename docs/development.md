@@ -1,16 +1,16 @@
 # Development Guide
 
 The current hands-on controller is the Nologo ESP32-S3 SuperMini. The production
-direction is autonomous ESP32 control; the laptop host is retained for
-simulation, diagnostics, monitoring and controlled experiments. The DevKitC-1
-is a later reference target, not the board currently validated in practice.
+direction is autonomous ESP32 control; the laptop host provides simulation,
+diagnostics and monitoring. The DevKitC-1 is a later reference target, not the
+board currently validated in practice.
 
 ## Repository structure
 
 - `tempeh-model` owns shared vocabulary.
 - `tempeh-control` owns generic hysteresis control.
 - `tempeh-runtime` owns real-run safety, supervision and heater policy.
-- `tempeh-protocol` owns serial, Tasmota and MQTT protocols.
+- `tempeh-protocol` owns serial and MQTT protocols.
 - `tempeh-firmware-esp32` owns autonomous probe reading and actuation.
 - `tempeh-host` owns simulation, serial diagnostics, logging and the live UI.
 - `tempeh-sim` owns the approximate fermentation simulation.
@@ -46,12 +46,12 @@ they do not describe a real food batch.
 
 Run `just monitor <port>` (or `cargo run -p tempeh-host -- monitor <port>`)
 and open `http://127.0.0.1:8787`. Monitor mode only observes the autonomous
-controller; it does not send Tasmota commands. To replay a serial fixture without
+controller; it does not send plug commands. To replay a serial fixture without
 hardware, use `cargo run -p tempeh-host -- monitor - <csv-path>` and pipe the
 fixture into stdin.
 
 The browser separates **heat requested** from **plug confirmation**. Confirmation
-means a Tasmota command reply, not a live relay measurement. Firmware limits its
+means a plug command reply, not a live relay measurement. Firmware limits its
 reporting validity to one lease duration (normally 20 seconds); an expired or
 failed confirmation is **unknown**, even when the last successful reply said ON
 or OFF. Temperatures and confirmations show their ages. ESP32 serial activity and
@@ -65,25 +65,8 @@ then search the capture for `state,`, `actuator,`, `failed`, and `WARN`. Keep th
 capture from before resetting the ESP32; a reset clears its current fault state.
 
 Stopping a host monitor only closes the laptop tool. It never stops an
-autonomous controller or cancels a Tasmota lease; use the ESP32 BOOT button to
+autonomous controller or cancels a plug lease; use the ESP32 BOOT button to
 stop a run.
-
-## Legacy host-actuated experiments
-
-The following commands pre-date autonomous ESP32 actuation:
-
-- `plug-test`
-- `trace-control-test`
-- `real-control-test`
-- `real-control-live`
-
-They can send physical plug commands. Do not use them as the normal incubation
-path, do not run them concurrently with an autonomous controller, and keep the
-heat mat disconnected unless following a deliberate engineering test plan.
-
-The autonomous firmware configures a short Tasmota `PulseTime` lease. The legacy
-host controller does not renew that lease continuously and is therefore not a
-drop-in alternative to autonomous operation.
 
 ## Simulation
 
