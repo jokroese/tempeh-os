@@ -9,7 +9,7 @@ tempeh-sim.workspace = true
 tempeh-control.workspace = true
 tempeh-pet.workspace = true
 tempeh-runtime.workspace = true
-tempeh-protocol.workspace = true
+tempeh-protocol = { workspace = true, features = ["status-parse"] }
 serialport.workspace = true
 ctrlc.workspace = true
 chrono.workspace = true

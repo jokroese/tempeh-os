@@ -11,14 +11,15 @@ use esp_idf_svc::log::EspLogger;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::wifi::{BlockingWifi, ClientConfiguration, Configuration, EspWifi};
 use esp_idf_sys::{
-    esp, esp_get_free_heap_size, esp_get_minimum_free_heap_size, esp_timer_get_time, gpio_config,
-    gpio_config_t, gpio_get_level, gpio_int_type_t_GPIO_INTR_DISABLE, gpio_mode_t_GPIO_MODE_INPUT,
-    gpio_mode_t_GPIO_MODE_INPUT_OUTPUT_OD, gpio_num_t, gpio_pulldown_t_GPIO_PULLDOWN_DISABLE,
-    gpio_pullup_t_GPIO_PULLUP_ENABLE, gpio_set_level, uxTaskGetStackHighWaterMark,
-    xTaskGetCurrentTaskHandle,
+    esp, esp_get_free_heap_size, esp_get_minimum_free_heap_size, esp_random, esp_timer_get_time,
+    gpio_config, gpio_config_t, gpio_get_level, gpio_int_type_t_GPIO_INTR_DISABLE,
+    gpio_mode_t_GPIO_MODE_INPUT, gpio_mode_t_GPIO_MODE_INPUT_OUTPUT_OD, gpio_num_t,
+    gpio_pulldown_t_GPIO_PULLDOWN_DISABLE, gpio_pullup_t_GPIO_PULLUP_ENABLE, gpio_set_level,
+    uxTaskGetStackHighWaterMark, xTaskGetCurrentTaskHandle,
 };
 use log::{info, warn};
 use tempeh_model::TemperatureProbe;
+use tempeh_protocol::status::{ProbeStatus, STATUS_VERSION, StatusRecord, format_status_line};
 use tempeh_protocol::tasmota::pulse_time_value_for_seconds;
 use tempeh_protocol::{format_actuator_line, format_control_line, format_state_line, probe_name};
 use tempeh_runtime::button::{ButtonConfig, ButtonReader};
@@ -44,6 +45,7 @@ const WIFI_RECONNECT_INTERVAL_S: f32 = 5.0;
 const ACTUATOR_RECOVERY_INTERVAL_S: f32 = 5.0;
 const LEASE_DURATION_S: u32 = 20;
 const LEASE_RENEWAL_INTERVAL_S: f32 = 5.0;
+const STATUS_INTERVAL_S: f32 = 5.0;
 
 const DS18B20_SKIP_ROM: u8 = 0xCC;
 const DS18B20_CONVERT_T: u8 = 0x44;
@@ -134,6 +136,9 @@ fn main() -> Result<()> {
     let pulse_time = pulse_time_value_for_seconds(LEASE_DURATION_S)
         .context("lease duration cannot be represented by Tasmota PulseTime")?;
     let start_us = now_us();
+    let boot_id = format!("{:08x}{:08x}", unsafe { esp_random() }, unsafe {
+        esp_random()
+    });
 
     lease.poll(0.0);
     match heater_output.configure_fail_safe(pulse_time) {
@@ -141,14 +146,14 @@ fn main() -> Result<()> {
             lease.record_success(0.0, false);
             supervisor.report_actuator_ready();
             println!("{}", format_state_line(0.0, "idle", "boot_configured"));
-            print_actuator_line(0.0, &lease, "boot_configured");
+            print_actuator_line(elapsed_s(start_us), &lease, "boot_configured");
         }
         Err(error) => {
             warn!("Tasmota boot configuration failed: {error:#}");
             lease.record_failure(0.0);
             let outcome = supervisor.report_fault(FaultReason::BootConfigFailed);
             print_supervisor_outcome(0.0, &outcome);
-            print_actuator_line(0.0, &lease, "boot_config_failed");
+            print_actuator_line(elapsed_s(start_us), &lease, "boot_config_failed");
         }
     }
 
@@ -211,6 +216,8 @@ fn main() -> Result<()> {
     let mut next_actuator_recovery_s = ACTUATOR_RECOVERY_INTERVAL_S;
     let mut last_diagnostics_s = 0.0_f32;
     let mut last_safety_tick_s = 0.0_f32;
+    let mut next_status_s = 0.0_f32;
+    let mut last_reported_state = None;
 
     loop {
         let time_s = elapsed_s(start_us);
@@ -226,12 +233,12 @@ fn main() -> Result<()> {
                     lease.record_success(time_s, false);
                     supervisor.report_actuator_ready();
                     info!("Tasmota actuator recovered; fault acknowledgement is now permitted");
-                    print_actuator_line(time_s, &lease, "actuator_recovered");
+                    print_actuator_line(elapsed_s(start_us), &lease, "actuator_recovered");
                 }
                 Err(error) => {
                     warn!("Tasmota actuator recovery failed: {error:#}");
                     lease.record_failure(time_s);
-                    print_actuator_line(time_s, &lease, "actuator_recovery_failed");
+                    print_actuator_line(elapsed_s(start_us), &lease, "actuator_recovery_failed");
                 }
             }
         }
@@ -299,15 +306,27 @@ fn main() -> Result<()> {
         }
 
         lease.set_desired(supervisor.desired_heater_on(), time_s);
-        run_heater_lease(time_s, &mut lease, &mut heater_output, &mut supervisor);
+        run_heater_lease(
+            time_s,
+            start_us,
+            &mut lease,
+            &mut heater_output,
+            &mut supervisor,
+        );
         show_status(&mut status_led, supervisor.state());
+        let report_time_s = elapsed_s(start_us);
+        if report_time_s >= next_status_s || last_reported_state != Some(supervisor.state()) {
+            print_status(&boot_id, report_time_s, &latest, &supervisor, &lease);
+            last_reported_state = Some(supervisor.state());
+            next_status_s = report_time_s + STATUS_INTERVAL_S;
+        }
         if let Some(mqtt) = mqtt.as_mut() {
             mqtt.poll(
-                time_s,
+                report_time_s,
                 &latest,
                 supervisor.state(),
                 supervisor.desired_heater_on(),
-                lease.confirmed_heater_on(),
+                lease.current_confirmation(report_time_s),
                 supervisor.actuator_ready(),
             );
         }
@@ -433,6 +452,7 @@ fn finish_probe_conversion(
 
 fn run_heater_lease(
     time_s: f32,
+    start_us: i64,
     lease: &mut HeaterLease,
     heater_output: &mut TasmotaHeaterOutput,
     supervisor: &mut RunSupervisor,
@@ -451,7 +471,7 @@ fn run_heater_lease(
     match heater_output.set_heater(on, success_reason) {
         Ok(()) => {
             lease.record_success(time_s, on);
-            print_actuator_line(time_s, lease, success_reason);
+            print_actuator_line(elapsed_s(start_us), lease, success_reason);
         }
         Err(error) => {
             warn!("Tasmota heater command failed: {error:#}");
@@ -460,7 +480,7 @@ fn run_heater_lease(
             }
 
             lease.record_failure(time_s);
-            print_actuator_line(time_s, lease, failure_reason);
+            print_actuator_line(elapsed_s(start_us), lease, failure_reason);
             let outcome = supervisor.report_fault(FaultReason::ActuatorFailed);
             print_supervisor_outcome(time_s, &outcome);
             lease.set_desired(false, time_s);
@@ -496,10 +516,48 @@ fn print_actuator_line(time_s: f32, lease: &HeaterLease, reason: &str) {
         format_actuator_line(
             time_s,
             lease.desired_heater_on(),
-            lease.confirmed_heater_on(),
+            lease.current_confirmation(time_s),
             reason,
         )
     );
+}
+
+fn print_status(
+    boot_id: &str,
+    time_s: f32,
+    latest: &LatestTemperatureReadings,
+    supervisor: &RunSupervisor,
+    lease: &HeaterLease,
+) {
+    fn probe(value: Option<f32>, updated_at_s: Option<f32>, now_s: f32) -> ProbeStatus {
+        ProbeStatus {
+            temp_c: value,
+            age_s: updated_at_s.map(|at| (now_s - at).max(0.0)),
+        }
+    }
+
+    let fault_reason = match supervisor.state() {
+        RunState::Fault(reason) => Some(reason.as_str().to_owned()),
+        RunState::Idle | RunState::Running => None,
+    };
+    let status = StatusRecord {
+        version: STATUS_VERSION,
+        boot_id: boot_id.to_owned(),
+        uptime_s: time_s,
+        run_state: supervisor.state().as_str().to_owned(),
+        fault_reason,
+        desired_heater_on: supervisor.desired_heater_on(),
+        actuator_ready: supervisor.actuator_ready(),
+        confirmed_heater_on: lease.current_confirmation(time_s),
+        last_confirmed_heater_on: lease.last_successful_state(),
+        last_successful_command_s: lease.last_successful_command_s(),
+        last_successful_renewal_s: lease.last_successful_renewal_s(),
+        lease_duration_s: lease.lease_duration_s(),
+        room_air: probe(latest.room_air_temp_c, latest.room_air_updated_at_s, time_s),
+        box_air: probe(latest.box_air_temp_c, latest.box_air_updated_at_s, time_s),
+        product: probe(latest.product_temp_c, latest.product_updated_at_s, time_s),
+    };
+    println!("{}", format_status_line(&status));
 }
 
 fn show_status(status_led: &mut Option<StatusLed>, state: RunState) {

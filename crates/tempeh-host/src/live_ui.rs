@@ -3,7 +3,7 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::extract::{Query, State};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -11,7 +11,10 @@ use axum::response::{Html, IntoResponse};
 use axum::{Json, Router, routing::get};
 use futures_util::Stream;
 use serde::{Deserialize, Serialize};
+use tempeh_protocol::ParsedControlLine;
 use tokio::sync::broadcast;
+
+use crate::monitor::{MonitorSnapshot, MonitorState};
 
 const LIVE_RING_CAPACITY: usize = 10_800;
 const LIVE_CONTROL_HTML: &str = include_str!("live_control.html");
@@ -19,6 +22,8 @@ const LIVE_CONTROL_HTML: &str = include_str!("live_control.html");
 #[derive(Debug, Clone, Serialize)]
 struct LiveSample {
     seq: u64,
+    host_elapsed_s: f32,
+    segment: u64,
     time_s: f32,
     room_air_temp_c: Option<f32>,
     box_air_temp_c: f32,
@@ -29,26 +34,38 @@ struct LiveSample {
 
 #[derive(Debug, Clone, Serialize)]
 struct LiveStatus {
+    mode: &'static str,
     csv_path: String,
     sample_count: usize,
     retained_sample_count: usize,
     first_retained_seq: Option<u64>,
     latest: Option<LiveSample>,
+    monitor: MonitorSnapshot,
+    capture_path: Option<String>,
+    capture_error: Option<String>,
 }
 
 #[derive(Debug)]
 struct LiveRunState {
+    mode: &'static str,
     csv_path: String,
     samples: VecDeque<LiveSample>,
     next_seq: u64,
+    monitor: MonitorState,
+    capture_path: Option<String>,
+    capture_error: Option<String>,
 }
 
 impl LiveRunState {
     fn new(csv_path: impl Into<String>) -> Self {
         Self {
             csv_path: csv_path.into(),
+            mode: "host_control",
             samples: VecDeque::with_capacity(LIVE_RING_CAPACITY),
             next_seq: 1,
+            monitor: MonitorState::default(),
+            capture_path: None,
+            capture_error: None,
         }
     }
 
@@ -60,10 +77,13 @@ impl LiveRunState {
         product_temp_c: Option<f32>,
         heater_on: bool,
         reason: impl Into<String>,
+        host_elapsed_s: f32,
     ) -> LiveSample {
         let reason = reason.into();
         let sample = LiveSample {
             seq: self.next_seq,
+            host_elapsed_s,
+            segment: self.monitor.segment(),
             time_s,
             room_air_temp_c,
             box_air_temp_c,
@@ -87,13 +107,17 @@ impl LiveRunState {
             .collect()
     }
 
-    fn status(&self) -> LiveStatus {
+    fn status(&self, now_s: f32) -> LiveStatus {
         LiveStatus {
+            mode: self.mode,
             csv_path: self.csv_path.clone(),
             sample_count: self.next_seq.saturating_sub(1) as usize,
             retained_sample_count: self.samples.len(),
             first_retained_seq: self.samples.front().map(|sample| sample.seq),
             latest: self.samples.back().cloned(),
+            monitor: self.monitor.snapshot(now_s),
+            capture_path: self.capture_path.clone(),
+            capture_error: self.capture_error.clone(),
         }
     }
 }
@@ -102,6 +126,7 @@ impl LiveRunState {
 pub(crate) struct LiveAppState {
     run: Mutex<LiveRunState>,
     events: broadcast::Sender<LiveSample>,
+    started: Instant,
 }
 
 impl LiveAppState {
@@ -110,7 +135,67 @@ impl LiveAppState {
         Self {
             run: Mutex::new(LiveRunState::new(csv_path)),
             events,
+            started: Instant::now(),
         }
+    }
+
+    pub(crate) fn new_monitor(csv_path: impl Into<String>) -> Self {
+        let state = Self::new(csv_path);
+        state.run.lock().expect("live state mutex poisoned").mode = "monitor";
+        state
+    }
+
+    pub(crate) fn now_s(&self) -> f32 {
+        self.started.elapsed().as_secs_f32()
+    }
+
+    pub(crate) fn set_capture_path(&self, path: String) {
+        self.run
+            .lock()
+            .expect("live state mutex poisoned")
+            .capture_path = Some(path);
+    }
+
+    pub(crate) fn capture_failed(&self, message: String) {
+        let mut run = self.run.lock().expect("live state mutex poisoned");
+        run.capture_error = Some(message.clone());
+        run.monitor.event(self.now_s(), "capture", message);
+    }
+
+    pub(crate) fn ingest_serial(
+        &self,
+        line: &str,
+        now_s: f32,
+    ) -> Result<Option<ParsedControlLine>, String> {
+        self.run
+            .lock()
+            .expect("live state mutex poisoned")
+            .monitor
+            .ingest(line, now_s)
+    }
+
+    pub(crate) fn monitor_event(&self, now_s: f32, kind: &str, message: &str) {
+        self.run
+            .lock()
+            .expect("live state mutex poisoned")
+            .monitor
+            .event(now_s, kind, message);
+    }
+
+    pub(crate) fn monitor_snapshot(&self, now_s: f32) -> MonitorSnapshot {
+        self.run
+            .lock()
+            .expect("live state mutex poisoned")
+            .monitor
+            .snapshot(now_s)
+    }
+
+    pub(crate) fn serial_disconnected(&self, now_s: f32) {
+        self.run
+            .lock()
+            .expect("live state mutex poisoned")
+            .monitor
+            .disconnect(now_s);
     }
 
     pub(crate) fn push_sample(
@@ -124,6 +209,16 @@ impl LiveAppState {
     ) {
         let sample = {
             let mut run = self.run.lock().expect("live state mutex poisoned");
+            let now_s = self.now_s();
+            if run.mode == "host_control" {
+                run.monitor.host_sample(
+                    now_s,
+                    room_air_temp_c,
+                    box_air_temp_c,
+                    product_temp_c,
+                    heater_on,
+                );
+            }
             run.push(
                 time_s,
                 room_air_temp_c,
@@ -131,6 +226,7 @@ impl LiveAppState {
                 product_temp_c,
                 heater_on,
                 reason,
+                now_s,
             )
         };
         let _ = self.events.send(sample);
@@ -150,7 +246,7 @@ async fn live_index() -> Html<&'static str> {
 
 async fn live_status(State(state): State<SharedLiveAppState>) -> impl IntoResponse {
     let run = state.run.lock().expect("live state mutex poisoned");
-    Json(run.status())
+    Json(run.status(state.now_s()))
 }
 
 async fn live_samples(

@@ -3,6 +3,10 @@ name = "tempeh-protocol"
 version.workspace = true
 edition.workspace = true
 
+[features]
+status-parse = []
+
 [dependencies]
+serde.workspace = true
 serde_json.workspace = true
 tempeh-model.workspace = true

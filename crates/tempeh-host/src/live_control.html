@@ -93,7 +93,7 @@ code {
 <body>
 <main>
   <h1>Tempeh OS live control</h1>
-  <p class="sub">Live box-air temperature and heater state from the supervised host control loop.</p>
+  <p class="sub" id="mode-description">Temperature, controller faults and Tasmota confirmations. A confirmation is evidence from an earlier command, not a live relay measurement.</p>
 
   <section class="cards">
     <div class="card">
@@ -109,8 +109,23 @@ code {
       <div class="value" id="room-temp">—</div>
     </div>
     <div class="card">
-      <div class="label">Heater</div>
-      <div class="value" id="heater">—</div>
+      <div class="label">Heat requested</div>
+      <div class="value" id="heater">unknown</div>
+    </div>
+    <div class="card">
+      <div class="label">Plug confirmation</div>
+      <div class="value" id="plug-confirmation">unknown</div>
+      <div class="muted" id="plug-history"></div>
+    </div>
+    <div class="card">
+      <div class="label">Controller</div>
+      <div class="value" id="controller">unknown</div>
+      <div class="muted" id="fault-reason"></div>
+    </div>
+    <div class="card">
+      <div class="label">ESP32 serial</div>
+      <div class="value" id="serial-status">waiting</div>
+      <div class="muted" id="status-age"></div>
     </div>
     <div class="card">
       <div class="label">Elapsed</div>
@@ -135,8 +150,14 @@ code {
   </section>
 
   <p class="muted">
-    CSV: <code id="csv-path">loading…</code>
+    CSV: <code id="csv-path">loading…</code><br>
+    Serial evidence: <code id="capture-path">loading…</code><br>
+    <span id="capture-error"></span>
   </p>
+  <section class="card" aria-label="Recent diagnostics">
+    <div class="label">Recent diagnostics</div>
+    <ol id="diagnostics"></ol>
+  </section>
 </main>
 
 <script>
@@ -149,6 +170,16 @@ const ids = {
   latestTemp: document.getElementById("latest-temp"),
   productTemp: document.getElementById("product-temp"),
   heater: document.getElementById("heater"),
+  plug: document.getElementById("plug-confirmation"),
+  plugHistory: document.getElementById("plug-history"),
+  controller: document.getElementById("controller"),
+  faultReason: document.getElementById("fault-reason"),
+  serialStatus: document.getElementById("serial-status"),
+  statusAge: document.getElementById("status-age"),
+  capturePath: document.getElementById("capture-path"),
+  captureError: document.getElementById("capture-error"),
+  diagnostics: document.getElementById("diagnostics"),
+  modeDescription: document.getElementById("mode-description"),
   elapsed: document.getElementById("elapsed"),
   sampleCount: document.getElementById("sample-count"),
   streamState: document.getElementById("stream-state"),
@@ -177,6 +208,41 @@ async function updateStatus() {
 
   const status = await statusResponse.json();
   ids.csvPath.textContent = status.csv_path;
+  ids.capturePath.textContent = status.capture_path ?? "not recording";
+  ids.captureError.textContent = status.capture_error ? `Recording failed: ${status.capture_error}` : "";
+  const m = status.monitor;
+  if (status.mode === "host_control") {
+    ids.modeDescription.textContent = "Live temperature and requested heat from the supervised host control loop.";
+  }
+  ids.controller.textContent = m.run_state;
+  const reasons = {
+    box_air_stale: "Box-air probe stopped reporting",
+    product_stale: "Product probe stopped reporting",
+    box_air_hard_cutoff: "Box-air safety temperature reached",
+    product_hard_cutoff: "Product safety temperature reached",
+    actuator_failed: "Tasmota command failed",
+    boot_config_failed: "Tasmota safety setup failed",
+  };
+  ids.faultReason.textContent = m.fault_reason
+    ? `${reasons[m.fault_reason] ?? "Fault"} (${m.fault_reason})` : "";
+  ids.heater.textContent = m.desired_heater_on === null ? "unknown" : (m.desired_heater_on ? "on" : "off");
+  ids.plug.textContent = m.confirmed_heater_on === null ? "unknown" : (m.confirmed_heater_on ? "on" : "off");
+  ids.plugHistory.textContent = m.last_confirmed_heater_on === null ? "No confirmation recorded"
+    : `Last confirmed ${m.last_confirmed_heater_on ? "on" : "off"}${m.confirmation_age_s === null ? " (age unknown)" : ` ${Math.floor(m.confirmation_age_s)} s ago`}`;
+  ids.serialStatus.textContent = status.mode === "host_control" ? "not monitored" :
+    (m.disconnected ? "disconnected" : (m.serial_stale ? "stale" : "receiving"));
+  ids.statusAge.textContent = status.mode === "host_control" ? "" : m.status_age_s === null
+    ? "No periodic status yet" : `Controller status ${Math.floor(m.status_age_s)} s old${m.status_stale ? " (stale)" : ""}`;
+  for (const [id, probe] of [[ids.latestTemp, m.box_air], [ids.productTemp, m.product], [ids.roomTemp, m.room_air]]) {
+    id.textContent = probe.value_c === null ? "—"
+      : `${probe.value_c.toFixed(2)} °C${probe.age_s === null ? "" : ` · ${Math.floor(probe.age_s)} s old`}`;
+  }
+  ids.diagnostics.replaceChildren(...m.events.slice(-20).reverse().map(event => {
+    const item = document.createElement("li");
+    item.textContent = `${fmtElapsed(event.time_s)} ${event.kind}: ${event.message}`;
+    return item;
+  }));
+  window.monitorEvents = m.events;
 
   if (status.first_retained_seq !== null && lastSeq > 0 && lastSeq < status.first_retained_seq - 1) {
     console.warn("Browser fell behind retained live history; CSV remains the durable full log.");
@@ -234,14 +300,6 @@ function render() {
     return;
   }
 
-  ids.latestTemp.textContent = `${latest.box_air_temp_c.toFixed(2)} °C`;
-  ids.productTemp.textContent =
-    latest.product_temp_c === null || latest.product_temp_c === undefined
-      ? "—" : `${latest.product_temp_c.toFixed(2)} °C`;
-  ids.roomTemp.textContent =
-    latest.room_air_temp_c === null || latest.room_air_temp_c === undefined
-      ? "—" : `${latest.room_air_temp_c.toFixed(2)} °C`;
-  ids.heater.textContent = latest.heater_on ? "on" : "off";
   ids.elapsed.textContent = fmtElapsed(latest.time_s);
 
   const width = 900;
@@ -251,8 +309,8 @@ function render() {
   const plotH = height - margin.top - margin.bottom;
 
   const visible = samples.slice(-900);
-  const tMin = visible[0].time_s;
-  const tMax = Math.max(tMin + 1, visible[visible.length - 1].time_s);
+  const tMin = visible[0].host_elapsed_s;
+  const tMax = Math.max(tMin + 1, visible[visible.length - 1].host_elapsed_s);
 
   const tempValues = visible.flatMap(sample => {
     const values = [sample.box_air_temp_c];
@@ -292,13 +350,17 @@ function render() {
 
   let heaterBands = "";
   let bandStart = null;
+  let bandSegment = null;
   for (const sample of visible) {
-    if (sample.heater_on && bandStart === null) bandStart = sample.time_s;
-    if (!sample.heater_on && bandStart !== null) {
+    if (bandStart !== null && (bandSegment !== sample.segment || !sample.heater_on)) {
       const x0 = x(bandStart);
-      const x1 = x(sample.time_s);
+      const x1 = x(sample.host_elapsed_s);
       heaterBands += `<rect x="${x0.toFixed(1)}" y="${margin.top}" width="${Math.max(1, x1 - x0).toFixed(1)}" height="${plotH}" fill="var(--hot)" opacity="0.16"/>`;
       bandStart = null;
+    }
+    if (sample.heater_on && bandStart === null) {
+      bandStart = sample.host_elapsed_s;
+      bandSegment = sample.segment;
     }
   }
   if (bandStart !== null) {
@@ -313,18 +375,22 @@ function render() {
       return value !== null && value !== undefined;
     });
     return validPoints.map((sample, index) => {
-      const command = index === 0 ? "M" : "L";
-      return `${command} ${x(sample.time_s).toFixed(2)} ${y(valueFn(sample)).toFixed(2)}`;
+      const command = index === 0 || validPoints[index - 1].segment !== sample.segment ? "M" : "L";
+      return `${command} ${x(sample.host_elapsed_s).toFixed(2)} ${y(valueFn(sample)).toFixed(2)}`;
     }).join(" ");
   }
 
   const boxPath = linePath(visible, sample => sample.box_air_temp_c);
   const productPath = linePath(visible, sample => sample.product_temp_c);
 
-  const latestX = x(latest.time_s);
+  const latestX = x(latest.host_elapsed_s);
   const latestY = y(latest.box_air_temp_c);
   const latestProductX = latest.product_temp_c === null || latest.product_temp_c === undefined
-    ? null : x(latest.time_s);
+    ? null : x(latest.host_elapsed_s);
+  const markers = (window.monitorEvents ?? []).filter(event =>
+    ["reboot", "state"].includes(event.kind) && event.time_s >= tMin && event.time_s <= tMax
+      && (event.kind === "reboot" || event.message.startsWith("fault"))
+  ).map(event => `<line x1="${x(event.time_s).toFixed(1)}" y1="${margin.top}" x2="${x(event.time_s).toFixed(1)}" y2="${margin.top + plotH}" stroke="var(--hot)" stroke-dasharray="5 5"/>`).join("");
   const latestProductY = latest.product_temp_c === null || latest.product_temp_c === undefined
     ? null : y(latest.product_temp_c);
   const latestProductMarker = latestProductX === null || latestProductY === null
@@ -334,13 +400,14 @@ function render() {
   ids.plot.innerHTML = `
     ${grid}
     ${heaterBands}
+    ${markers}
     <line x1="${margin.left}" y1="${margin.top + plotH}" x2="${width - margin.right}" y2="${margin.top + plotH}" stroke="currentColor" opacity="0.35"/>
     <path d="${boxPath}" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round"/>
     <path d="${productPath}" fill="none" stroke="var(--hot)" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
     <circle cx="${latestX.toFixed(1)}" cy="${latestY.toFixed(1)}" r="4.5" fill="currentColor"/>
     ${latestProductMarker}
     <rect x="${margin.left}" y="${height - 48}" width="14" height="14" rx="4" fill="var(--hot)" opacity="0.35"/>
-    <text x="${margin.left + 22}" y="${height - 36}" font-size="13" fill="currentColor">heater on</text>
+    <text x="${margin.left + 22}" y="${height - 36}" font-size="13" fill="currentColor">heat requested</text>
     <line x1="${margin.left + 118}" y1="${height - 41}" x2="${margin.left + 148}" y2="${height - 41}" stroke="currentColor" stroke-width="2.6"/>
     <text x="${margin.left + 154}" y="${height - 36}" font-size="13" fill="currentColor">box air</text>
     <line x1="${margin.left + 230}" y1="${height - 41}" x2="${margin.left + 260}" y2="${height - 41}" stroke="var(--hot)" stroke-width="2.4"/>
@@ -351,8 +418,8 @@ function render() {
 catchUp(0).catch(error => console.error(error));
 connectEvents();
 setInterval(() => {
-  updateStatus().catch(error => console.error(error));
-}, 5000);
+  updateStatus().then(render).catch(error => console.error(error));
+}, 1000);
 </script>
 </body>
 </html>

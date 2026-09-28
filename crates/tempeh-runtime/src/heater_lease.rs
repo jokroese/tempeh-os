@@ -85,6 +85,7 @@ pub struct HeaterLease {
     config: LeaseConfig,
     desired_on: bool,
     confirmed_state: ConfirmedHeaterState,
+    last_successful_state: Option<bool>,
     due_at_s: f32,
     last_successful_command_s: Option<f32>,
     last_successful_renewal_s: Option<f32>,
@@ -96,6 +97,7 @@ impl HeaterLease {
             config,
             desired_on: false,
             confirmed_state: ConfirmedHeaterState::Unknown,
+            last_successful_state: None,
             due_at_s: 0.0,
             last_successful_command_s: None,
             last_successful_renewal_s: None,
@@ -133,6 +135,7 @@ impl HeaterLease {
             ConfirmedHeaterState::Off
         };
         self.last_successful_command_s = Some(now_s);
+        self.last_successful_state = Some(on);
         if on {
             self.last_successful_renewal_s = Some(now_s);
         }
@@ -153,6 +156,27 @@ impl HeaterLease {
 
     pub fn confirmed_heater_on(&self) -> Option<bool> {
         self.confirmed_state.as_option()
+    }
+
+    /// The last command reply is evidence only for one lease duration.
+    /// This does not affect the state used to schedule commands.
+    pub fn current_confirmation(&self, now_s: f32) -> Option<bool> {
+        let confirmed_at_s = self.last_successful_command_s?;
+        if !now_s.is_finite()
+            || now_s < confirmed_at_s
+            || now_s - confirmed_at_s >= self.config.lease_duration_s
+        {
+            return None;
+        }
+        self.confirmed_heater_on()
+    }
+
+    pub fn last_successful_state(&self) -> Option<bool> {
+        self.last_successful_state
+    }
+
+    pub fn lease_duration_s(&self) -> f32 {
+        self.config.lease_duration_s
     }
 
     pub fn last_successful_command_s(&self) -> Option<f32> {
@@ -180,6 +204,38 @@ mod tests {
 
     fn lease() -> HeaterLease {
         HeaterLease::new(LeaseConfig::default())
+    }
+
+    #[test]
+    fn confirmations_expire_for_both_power_states_without_changing_scheduling() {
+        let mut lease = lease();
+        assert_eq!(lease.current_confirmation(0.0), None);
+        lease.set_desired(true, 0.0);
+        assert_eq!(lease.poll(0.0), LeaseAction::SendOn);
+        lease.record_success(0.0, true);
+        assert_eq!(lease.current_confirmation(19.999), Some(true));
+        assert_eq!(lease.current_confirmation(20.0), None);
+        assert_eq!(lease.poll(20.0), LeaseAction::SendOn);
+
+        lease.set_desired(false, 21.0);
+        assert_eq!(lease.poll(21.0), LeaseAction::SendOff);
+        lease.record_success(21.0, false);
+        assert_eq!(lease.current_confirmation(40.999), Some(false));
+        assert_eq!(lease.current_confirmation(41.0), None);
+        assert_eq!(lease.poll(41.0), LeaseAction::None);
+    }
+
+    #[test]
+    fn failed_command_preserves_history_but_invalidates_confirmation() {
+        let mut lease = lease();
+        lease.record_success(3.0, true);
+        lease.record_failure(4.0);
+        assert_eq!(lease.current_confirmation(4.0), None);
+        assert_eq!(lease.last_successful_state(), Some(true));
+        assert_eq!(lease.last_successful_command_s(), Some(3.0));
+        lease.record_success(5.0, true);
+        assert_eq!(lease.current_confirmation(5.0), Some(true));
+        assert_eq!(lease.current_confirmation(f32::NAN), None);
     }
 
     #[test]

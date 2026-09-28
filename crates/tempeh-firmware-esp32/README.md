@@ -33,6 +33,17 @@ state,22,fault,actuator_failed
 ```
 
 An empty confirmed-state field means the physical relay state is unknown.
+Successful replies remain usable as relay evidence for at most one configured
+lease duration, including replies confirming OFF. Failed commands invalidate the
+current confirmation but retain the last successful reply for diagnostics. The
+`control` heater field is the requested state; it is not a live relay reading.
+
+The firmware also emits a versioned `status,<JSON>` record every 5 seconds and
+after controller-state changes. It contains a per-boot identifier, uptime,
+controller state and fault reason, requested heat, actuator readiness, current
+and last successful Tasmota confirmations, their timestamps, the lease duration,
+and each probe's latest temperature and age. A monitor opened after a fault can
+therefore recover the latched reason without resetting the controller.
 
 ## Pins
 
