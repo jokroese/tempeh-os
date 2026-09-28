@@ -22,6 +22,9 @@ pub struct StatePayload<'a> {
     pub product_age_s: Option<f32>,
     pub run_state: &'a str,
     pub fault_reason: Option<&'a str>,
+    pub pause_reason: Option<&'a str>,
+    pub actuator_warning: Option<&'a str>,
+    pub interruption_started_s: Option<f32>,
     pub desired_heater_on: bool,
     pub confirmed_heater_on: Option<bool>,
     pub last_confirmed_heater_on: Option<bool>,
@@ -163,12 +166,13 @@ pub fn state_payload(state: StatePayload<'_>) -> Result<String, MqttProtocolErro
         || !valid_optional_age(state.box_air_age_s)
         || !valid_optional_age(state.product_age_s)
         || !valid_optional_age(state.confirmation_age_s)
+        || !valid_optional_age(state.interruption_started_s)
         || !state.lease_duration_s.is_finite()
         || state.lease_duration_s <= 0.0
         || state.boot_id.is_empty()
         || !state.time_s.is_finite()
         || state.time_s < 0.0
-        || !matches!(state.run_state, "idle" | "running" | "fault")
+        || !matches!(state.run_state, "idle" | "running" | "paused" | "fault")
     {
         return Err(MqttProtocolError::InvalidState);
     }
@@ -184,6 +188,9 @@ pub fn state_payload(state: StatePayload<'_>) -> Result<String, MqttProtocolErro
         "product_age_s": state.product_age_s,
         "run_state": state.run_state,
         "fault_reason": state.fault_reason.unwrap_or("none"),
+        "pause_reason": state.pause_reason,
+        "actuator_warning": state.actuator_warning,
+        "interruption_started_s": state.interruption_started_s,
         "desired_heater_on": state.desired_heater_on,
         "confirmed_heater": match state.confirmed_heater_on {
             Some(true) => "on",
@@ -242,6 +249,9 @@ mod tests {
             product_age_s: None,
             run_state: "running",
             fault_reason: None,
+            pause_reason: None,
+            actuator_warning: None,
+            interruption_started_s: None,
             desired_heater_on: true,
             confirmed_heater_on: Some(true),
             last_confirmed_heater_on: Some(true),
@@ -294,6 +304,25 @@ mod tests {
         assert_eq!(json["confirmation_age_s"], 22.0);
         assert_eq!(json["box_air_age_s"], 21.0);
         assert_eq!(json["fault_reason"], "actuator_failed");
+    }
+
+    #[test]
+    fn formats_paused_communication_without_a_fault_reason() {
+        let payload = state_payload(StatePayload {
+            run_state: "paused",
+            fault_reason: None,
+            pause_reason: Some("actuator_unreachable"),
+            interruption_started_s: Some(10.0),
+            desired_heater_on: false,
+            confirmed_heater_on: None,
+            ..sample_state()
+        })
+        .unwrap();
+        let json: Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(json["run_state"], "paused");
+        assert_eq!(json["pause_reason"], "actuator_unreachable");
+        assert_eq!(json["fault_reason"], "none");
+        assert_eq!(json["confirmed_heater"], "unknown");
     }
 
     #[test]

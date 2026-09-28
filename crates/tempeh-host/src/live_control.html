@@ -220,7 +220,14 @@ async function updateStatus() {
     boot_config_failed: "Tasmota safety setup failed",
   };
   ids.faultReason.textContent = m.fault_reason
-    ? `${reasons[m.fault_reason] ?? "Fault"} (${m.fault_reason})` : "";
+    ? `${reasons[m.fault_reason] ?? "Fault"} (${m.fault_reason})`
+    : m.run_state === "paused"
+      ? `Plug communication paused heating${m.interruption_age_s === null ? "" : ` · ${Math.floor(m.interruption_age_s)} s`}; retrying automatically. Relay state may be unknown.`
+      : m.actuator_warning === "configuration_unconfirmed"
+        ? "Plug safety setup is unconfirmed; retrying before a run can start."
+        : m.actuator_warning
+        ? "Heater command reply missing; retrying within the plug lease."
+        : "";
   ids.heater.textContent = m.desired_heater_on === null ? "unknown" : (m.desired_heater_on ? "on" : "off");
   ids.plug.textContent = m.confirmed_heater_on === null ? "unknown" : (m.confirmed_heater_on ? "on" : "off");
   ids.plugHistory.textContent = m.last_confirmed_heater_on === null ? "No confirmation recorded"

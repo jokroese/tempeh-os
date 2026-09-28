@@ -179,7 +179,7 @@ The selected actuator boundary is:
 RunSupervisor -> HeaterLease -> TasmotaHeaterOutput -> Tasmota plug
 ```
 
-The firmware confirms `PowerOnState 0` and a 20-second `PulseTime` before declaring the actuator ready. It renews the lease every 5 seconds while heat is desired. Failed commands enter a latched fault and stop renewal; Tasmota then turns the relay off when its remaining lease expires. After a network interruption, firmware requests Wi-Fi reconnection and reapplies the safe Tasmota configuration before it permits the fault to be acknowledged.
+The firmware confirms `PowerOnState 0` and a 20-second `PulseTime` before declaring the actuator ready. It renews the lease every 5 seconds while heat is desired. An unanswered ON is retried after 1 second. Without a confirmed renewal by 15 seconds, the run pauses and requests no heat; the plug lease still expires after 20 seconds. The firmware reapplies the safe plug configuration and resumes automatically when communication and fresh temperature checks recover. A contradictory relay reply, rejected safety setting, unsafe temperature, or stale required probe instead latches a fault.
 
 ## Dependency direction
 

@@ -12,6 +12,8 @@ pub enum Status {
     Booting,
     Idle,
     Running,
+    Retrying,
+    Paused,
     Fault,
 }
 
@@ -20,6 +22,7 @@ impl From<RunState> for Status {
         match state {
             RunState::Idle => Self::Idle,
             RunState::Running => Self::Running,
+            RunState::Paused => Self::Paused,
             RunState::Fault(_) => Self::Fault,
         }
     }
@@ -48,6 +51,8 @@ impl StatusLed {
             Status::Booting => Rgb::new(12, 5, 0),
             Status::Idle => Rgb::new(0, 0, 12),
             Status::Running => Rgb::new(0, 12, 0),
+            Status::Retrying => Rgb::new(12, 9, 0),
+            Status::Paused => Rgb::new(8, 0, 10),
             Status::Fault => Rgb::new(12, 0, 0),
         };
         self.write(rgb)?;

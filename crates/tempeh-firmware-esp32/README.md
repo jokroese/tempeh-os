@@ -38,8 +38,8 @@ Actuator records distinguish the desired state from the last state confirmed by 
 ```text
 state,12,running,user_start
 actuator,17,1,1,lease_renewed
-actuator,22,1,,lease_renewal_failed
-state,22,fault,actuator_failed
+actuator,22,1,,renewal_reply_missing
+actuator,23,1,1,lease_renewed
 ```
 
 An empty confirmed-state field means the physical relay state is unknown.
@@ -50,7 +50,7 @@ current confirmation but retain the last successful reply for diagnostics. The
 
 The firmware also emits a versioned `status,<JSON>` record every 5 seconds and
 after controller-state changes. It contains a per-boot identifier, uptime,
-controller state and fault reason, requested heat, actuator readiness, current
+controller state, fault or pause reason, active retry warning, requested heat, actuator readiness, current
 and last successful Tasmota confirmations, their timestamps, the lease duration,
 and each probe's latest temperature and age. A monitor opened after a fault can
 therefore recover the latched reason without resetting the controller.
@@ -67,7 +67,7 @@ GPIO48 -> built-in WS2812 status LED
 G     -> probe adapter GND / BLK
 ```
 
-The status LED is amber while booting, blue while idle, green while running, and red while faulted. If its RMT driver cannot start, the controller continues with serial status reporting.
+The status LED is amber while booting or retrying a missing ON reply, blue while idle, green while running, purple while paused for plug communication, and red for a latched fault. If its RMT driver cannot start, the controller continues with serial status reporting.
 
 ## Developer setup
 
@@ -200,7 +200,11 @@ Every response body is read as complete JSON and checked against the requested v
 
 While heating, firmware sends `Power On` every 5 seconds. Tasmota restarts its 20-second `PulseTime` on each command. If the ESP32, Wi-Fi connection, or control loop stops renewing, the plug turns itself off. The encoding follows the [Tasmota command reference](https://tasmota.github.io/docs/Commands/#control).
 
-Any failed or contradictory actuator response enters a latched fault and requests no heat. A failed ON renewal also triggers an immediate best-effort OFF command. Firmware requests Wi-Fi reconnection and retries the full safe Tasmota configuration every 5 seconds; recovery permits acknowledgement but does not restart the run. Hold BOOT for 2 seconds to acknowledge a recovered fault, then hold it again to start a new run.
+An ON request that times out may already have executed at the plug. The firmware records its confirmation as unknown and retries after 1 second without sending an immediate OFF. If no ON reply is confirmed within 15 seconds of the last confirmed renewal, it pauses the run, requests no heat, and repeatedly checks OFF and the full safe plug configuration. A pause remains recoverable regardless of duration: once the plug configuration, current temperatures and any newly needed ON command are confirmed, heating resumes automatically. A short BOOT press cancels a paused run.
+
+A latched red fault is reserved for evidence that safe control is unreliable: a temperature cutoff, stale required probe, contradictory plug reply, or rejected safety setting. A missing OFF reply pauses an active run and triggers safe configuration retries; it is not by itself evidence for a latched fault. A latched fault remains stopped after communication recovers. Hold BOOT for 2 seconds to acknowledge after the cause is resolved, then hold again to start a new run.
+
+After an unanswered ON, an OFF command can race with that earlier request. The firmware continues sending OFF for one lease duration after the ambiguous ON, even after an OFF reply succeeds. Plug confirmation is reported as unknown whenever a command reply is missing; neither a previous reply nor the lease timer is a live relay measurement.
 
 Expected boot log includes:
 
@@ -248,8 +252,11 @@ Keep the heat mat disconnected for this check.
 4. Press BOOT once. Confirm the plug turns off and the LED returns to blue.
 5. Start again, then unplug the box-air probe. Confirm the LED turns red and the
    plug turns off.
-6. Reconnect and acknowledge the fault. Start again, then power down the ESP32
-   or disconnect its Wi-Fi. Confirm the plug turns off within 20 seconds.
+6. Reconnect and acknowledge the fault. Start again, then disconnect Wi-Fi.
+   Confirm the plug turns off within 20 seconds, the LED turns purple while
+   communication is unavailable, and the run resumes automatically after Wi-Fi
+   and safe plug configuration recover. Powering down the ESP32 instead requires
+   a deliberate new start after reboot.
 
 Do not connect the heat mat until these checks behave as expected.
 

@@ -149,6 +149,7 @@ impl MqttTelemetry {
         desired_heater_on: bool,
         lease: &HeaterLease,
         actuator_ready: bool,
+        interruption_started_s: Option<f32>,
     ) {
         if !self.connection.connected.load(Ordering::Acquire)
             || time_s < self.next_publish_attempt_s
@@ -163,6 +164,7 @@ impl MqttTelemetry {
             desired_heater_on,
             confirmed_heater_on: lease.current_confirmation(time_s),
             actuator_ready,
+            interruption_started_s,
         };
         let status_changed = self.last_status != Some(status);
         let periodic_due = time_s >= self.next_periodic_publish_s;
@@ -183,6 +185,7 @@ impl MqttTelemetry {
                     desired_heater_on,
                     lease,
                     actuator_ready,
+                    interruption_started_s,
                 )?;
             }
 
@@ -237,6 +240,7 @@ impl MqttTelemetry {
         desired_heater_on: bool,
         lease: &HeaterLease,
         actuator_ready: bool,
+        interruption_started_s: Option<f32>,
     ) -> Result<()> {
         let payload = state_payload(StatePayload {
             time_s,
@@ -249,6 +253,13 @@ impl MqttTelemetry {
             product_age_s: age_since(time_s, latest.product_updated_at_s),
             run_state: run_state.as_str(),
             fault_reason: fault_reason(run_state),
+            pause_reason: (run_state == RunState::Paused).then_some("actuator_unreachable"),
+            actuator_warning: match run_state {
+                RunState::Running if interruption_started_s.is_some() => Some("on_reply_missing"),
+                RunState::Idle if !actuator_ready => Some("configuration_unconfirmed"),
+                _ => None,
+            },
+            interruption_started_s: interruption_started_s,
             desired_heater_on,
             confirmed_heater_on: lease.current_confirmation(time_s),
             last_confirmed_heater_on: lease.last_successful_state(),
@@ -289,7 +300,7 @@ impl MqttTelemetry {
 fn fault_reason(state: RunState) -> Option<&'static str> {
     match state {
         RunState::Fault(reason) => Some(reason.as_str()),
-        RunState::Idle | RunState::Running => None,
+        RunState::Idle | RunState::Running | RunState::Paused => None,
     }
 }
 
@@ -307,10 +318,11 @@ struct ConnectionState {
     generation: AtomicU32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct TelemetryStatus {
     run_state: RunState,
     desired_heater_on: bool,
     confirmed_heater_on: Option<bool>,
     actuator_ready: bool,
+    interruption_started_s: Option<f32>,
 }
