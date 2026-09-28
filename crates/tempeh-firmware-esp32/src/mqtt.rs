@@ -11,9 +11,11 @@ use esp_idf_svc::mqtt::client::{
 use log::{info, warn};
 use tempeh_protocol::home_assistant::discovery_messages;
 use tempeh_protocol::mqtt::{
-    StatePayload, availability_topic, state_payload, state_topic, validate_device_id,
+    EventBuffer, StatePayload, availability_topic, event_payload, event_topic, state_payload,
+    state_topic, validate_device_id,
 };
 use tempeh_runtime::LatestTemperatureReadings;
+use tempeh_runtime::heater_lease::HeaterLease;
 use tempeh_runtime::run_supervisor::RunState;
 
 use crate::ProbeConfig;
@@ -30,6 +32,7 @@ const DEFAULT_DEVICE_ID: &str = "tempeh_controller";
 const DEFAULT_DEVICE_NAME: &str = "Tempeh Controller";
 const TELEMETRY_INTERVAL_S: f32 = 10.0;
 const PUBLISH_RETRY_INTERVAL_S: f32 = 5.0;
+const MAX_EVENTS_PER_POLL: usize = 4;
 
 pub struct MqttTelemetry {
     client: EspMqttClient<'static>,
@@ -42,10 +45,15 @@ pub struct MqttTelemetry {
     next_periodic_publish_s: f32,
     next_publish_attempt_s: f32,
     last_status: Option<TelemetryStatus>,
+    events: EventBuffer,
 }
 
 impl MqttTelemetry {
-    pub fn from_build_config(probes: ProbeConfig) -> Result<Option<Self>> {
+    pub fn from_build_config(
+        probes: ProbeConfig,
+        boot_id: &str,
+        initial_state: RunState,
+    ) -> Result<Option<Self>> {
         let Some(broker_url) = non_empty(MQTT_BROKER_URL) else {
             info!("MQTT telemetry disabled: no [mqtt] broker_url configured");
             return Ok(None);
@@ -122,7 +130,15 @@ impl MqttTelemetry {
             next_periodic_publish_s: 0.0,
             next_publish_attempt_s: 0.0,
             last_status: None,
+            events: EventBuffer::new(boot_id.to_owned(), 0.0, fault_reason(initial_state)),
         }))
+    }
+
+    pub fn observe_state_change(&mut self, time_s: f32, state: RunState) {
+        let dropped = self.events.observe_fault(time_s, fault_reason(state));
+        if dropped != 0 {
+            warn!("MQTT event buffer full; discarded {dropped} oldest event(s)");
+        }
     }
 
     pub fn poll(
@@ -131,7 +147,7 @@ impl MqttTelemetry {
         latest: &LatestTemperatureReadings,
         run_state: RunState,
         desired_heater_on: bool,
-        confirmed_heater_on: Option<bool>,
+        lease: &HeaterLease,
         actuator_ready: bool,
     ) {
         if !self.connection.connected.load(Ordering::Acquire)
@@ -145,7 +161,7 @@ impl MqttTelemetry {
         let status = TelemetryStatus {
             run_state,
             desired_heater_on,
-            confirmed_heater_on,
+            confirmed_heater_on: lease.current_confirmation(time_s),
             actuator_ready,
         };
         let status_changed = self.last_status != Some(status);
@@ -165,10 +181,12 @@ impl MqttTelemetry {
                     latest,
                     run_state,
                     desired_heater_on,
-                    confirmed_heater_on,
+                    lease,
                     actuator_ready,
                 )?;
             }
+
+            self.publish_pending_events()?;
 
             Ok(())
         })();
@@ -217,29 +235,47 @@ impl MqttTelemetry {
         latest: &LatestTemperatureReadings,
         run_state: RunState,
         desired_heater_on: bool,
-        confirmed_heater_on: Option<bool>,
+        lease: &HeaterLease,
         actuator_ready: bool,
     ) -> Result<()> {
-        let fault_reason = match run_state {
-            RunState::Fault(reason) => Some(reason.as_str()),
-            RunState::Idle | RunState::Running => None,
-        };
         let payload = state_payload(StatePayload {
             time_s,
+            boot_id: self.events.boot_id(),
             room_air_temp_c: latest.room_air_temp_c,
+            room_air_age_s: age_since(time_s, latest.room_air_updated_at_s),
             box_air_temp_c: latest.box_air_temp_c,
+            box_air_age_s: age_since(time_s, latest.box_air_updated_at_s),
             product_temp_c: latest.product_temp_c,
+            product_age_s: age_since(time_s, latest.product_updated_at_s),
             run_state: run_state.as_str(),
-            fault_reason,
+            fault_reason: fault_reason(run_state),
             desired_heater_on,
-            confirmed_heater_on,
+            confirmed_heater_on: lease.current_confirmation(time_s),
+            last_confirmed_heater_on: lease.last_successful_state(),
+            confirmation_age_s: age_since(time_s, lease.last_successful_command_s()),
+            lease_duration_s: lease.lease_duration_s(),
             actuator_ready,
         })
-        .map_err(|error| anyhow!("failed to build Home Assistant state: {error:?}"))?;
+        .map_err(|error| anyhow!("failed to build MQTT state: {error:?}"))?;
         let topic = state_topic(self.device_id)
             .map_err(|error| anyhow!("invalid MQTT state topic: {error:?}"))?;
 
         self.enqueue(&topic, payload.as_bytes(), true)
+    }
+
+    fn publish_pending_events(&mut self) -> Result<()> {
+        let topic = event_topic(self.device_id)
+            .map_err(|error| anyhow!("invalid MQTT event topic: {error:?}"))?;
+        for _ in 0..MAX_EVENTS_PER_POLL {
+            let Some(event) = self.events.front() else {
+                break;
+            };
+            let payload = event_payload(self.events.boot_id(), event)
+                .map_err(|error| anyhow!("failed to build MQTT event: {error:?}"))?;
+            self.enqueue(&topic, payload.as_bytes(), false)?;
+            self.events.pop_front();
+        }
+        Ok(())
     }
 
     fn enqueue(&mut self, topic: &str, payload: &[u8], retain: bool) -> Result<()> {
@@ -248,6 +284,17 @@ impl MqttTelemetry {
             .with_context(|| format!("failed to enqueue MQTT topic {topic}"))?;
         Ok(())
     }
+}
+
+fn fault_reason(state: RunState) -> Option<&'static str> {
+    match state {
+        RunState::Fault(reason) => Some(reason.as_str()),
+        RunState::Idle | RunState::Running => None,
+    }
+}
+
+fn age_since(time_s: f32, updated_at_s: Option<f32>) -> Option<f32> {
+    updated_at_s.map(|at| (time_s - at).max(0.0))
 }
 
 fn non_empty(value: Option<&'static str>) -> Option<&'static str> {
