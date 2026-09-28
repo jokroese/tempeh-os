@@ -3,8 +3,6 @@ resolver = "2"
 members = [
     "crates/tempeh-model",
     "crates/tempeh-control",
-    "crates/tempeh-sim",
-    "crates/tempeh-pet",
     "crates/tempeh-runtime",
     "crates/tempeh-protocol",
     "crates/tempeh-host",
@@ -13,8 +11,6 @@ members = [
 default-members = [
     "crates/tempeh-model",
     "crates/tempeh-control",
-    "crates/tempeh-sim",
-    "crates/tempeh-pet",
     "crates/tempeh-runtime",
     "crates/tempeh-protocol",
     "crates/tempeh-host",
@@ -27,8 +23,6 @@ edition = "2024"
 [workspace.dependencies]
 tempeh-model = { path = "crates/tempeh-model" }
 tempeh-control = { path = "crates/tempeh-control" }
-tempeh-sim = { path = "crates/tempeh-sim" }
-tempeh-pet = { path = "crates/tempeh-pet" }
 tempeh-runtime = { path = "crates/tempeh-runtime" }
 tempeh-protocol = { path = "crates/tempeh-protocol" }
 serialport = "4"

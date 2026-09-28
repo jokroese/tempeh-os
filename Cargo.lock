@@ -1746,7 +1746,6 @@ name = "tempeh-control"
 version = "0.1.0"
 dependencies = [
  "tempeh-model",
- "tempeh-sim",
 ]
 
 [[package]]
@@ -1777,25 +1776,15 @@ dependencies = [
  "serde",
  "serde_json",
  "serialport",
- "tempeh-control",
  "tempeh-model",
- "tempeh-pet",
  "tempeh-protocol",
  "tempeh-runtime",
- "tempeh-sim",
  "tokio",
 ]
 
 [[package]]
 name = "tempeh-model"
 version = "0.1.0"
-
-[[package]]
-name = "tempeh-pet"
-version = "0.1.0"
-dependencies = [
- "tempeh-model",
-]
 
 [[package]]
 name = "tempeh-protocol"
@@ -1811,13 +1800,6 @@ name = "tempeh-runtime"
 version = "0.1.0"
 dependencies = [
  "tempeh-control",
- "tempeh-model",
-]
-
-[[package]]
-name = "tempeh-sim"
-version = "0.1.0"
-dependencies = [
  "tempeh-model",
 ]
 
