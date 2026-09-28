@@ -31,7 +31,7 @@ use tempeh_runtime::{LatestTemperatureReadings, RealRunConfig, RealRunUpdate};
 
 use crate::mqtt::MqttTelemetry;
 use crate::status_led::{Status, StatusLed};
-use crate::tasmota::TasmotaHeaterOutput;
+use crate::tasmota::{ContradictoryPowerState, RejectedSafetySetting, TasmotaHeaterOutput};
 
 const BUTTON_GPIO: i32 = 0;
 const BOX_AIR_GPIO: i32 = 13;
@@ -151,8 +151,12 @@ fn main() -> Result<()> {
         Err(error) => {
             warn!("Tasmota boot configuration failed: {error:#}");
             lease.record_failure(0.0);
-            let outcome = supervisor.report_fault(FaultReason::BootConfigFailed);
-            print_supervisor_outcome(0.0, &outcome);
+            if error.downcast_ref::<ContradictoryPowerState>().is_some()
+                || error.downcast_ref::<RejectedSafetySetting>().is_some()
+            {
+                let outcome = supervisor.report_fault(FaultReason::BootConfigFailed);
+                print_supervisor_outcome(0.0, &outcome);
+            }
             print_actuator_line(elapsed_s(start_us), &lease, "boot_config_failed");
         }
     }
@@ -174,7 +178,9 @@ fn main() -> Result<()> {
 
     info!("Tempeh OS autonomous ESP32 controller");
     info!("BOOT button GPIO{BUTTON_GPIO}: hold 2 s to start or acknowledge; press to stop");
-    info!("status LED GPIO48: amber=boot, blue=idle, green=running, red=fault");
+    info!(
+        "status LED GPIO48: amber=boot/retrying, blue=idle, green=running, purple=paused, red=fault"
+    );
     if probes.box_air {
         info!("box_air DATA -> GPIO{BOX_AIR_GPIO}");
     }
@@ -204,7 +210,11 @@ fn main() -> Result<()> {
         }
     };
 
-    show_status(&mut status_led, supervisor.state());
+    show_status(
+        &mut status_led,
+        supervisor.state(),
+        !supervisor.actuator_ready(),
+    );
 
     let mut box_air_conversion_started = false;
     let mut room_air_conversion_started = false;
@@ -213,7 +223,9 @@ fn main() -> Result<()> {
     let mut next_probe_sweep_s = 0.0_f32;
     let mut next_safety_tick_s = 0.0_f32;
     let mut next_wifi_reconnect_s = WIFI_RECONNECT_INTERVAL_S;
+    let mut wifi_was_connected = true;
     let mut next_actuator_recovery_s = ACTUATOR_RECOVERY_INTERVAL_S;
+    let mut interruption_started_s: Option<f32> = None;
     let mut last_diagnostics_s = 0.0_f32;
     let mut last_safety_tick_s = 0.0_f32;
     let mut next_status_s = 0.0_f32;
@@ -223,22 +235,103 @@ fn main() -> Result<()> {
         let time_s = elapsed_s(start_us);
         let time_ms = elapsed_ms(start_us);
 
-        maybe_reconnect_wifi(time_s, &mut next_wifi_reconnect_s, &mut wifi);
+        maybe_reconnect_wifi(
+            time_s,
+            &mut next_wifi_reconnect_s,
+            &mut wifi_was_connected,
+            &mut wifi,
+        );
 
         if !supervisor.actuator_ready() && time_s >= next_actuator_recovery_s {
             next_actuator_recovery_s = time_s + ACTUATOR_RECOVERY_INTERVAL_S;
             match heater_output.configure_fail_safe(pulse_time) {
                 Ok(()) => {
-                    lease.set_desired(false, time_s);
-                    lease.record_success(time_s, false);
+                    let confirmed_at_s = elapsed_s(start_us);
+                    lease.set_desired(false, confirmed_at_s);
+                    lease.record_success(confirmed_at_s, false);
                     supervisor.report_actuator_ready();
-                    info!("Tasmota actuator recovered; fault acknowledgement is now permitted");
-                    print_actuator_line(elapsed_s(start_us), &lease, "actuator_recovered");
+                    print_actuator_line(confirmed_at_s, &lease, "actuator_recovered");
+                    if supervisor.state() == RunState::Paused {
+                        match supervisor.paused_heater_demand(confirmed_at_s, &latest) {
+                            Ok(needs_heat) => {
+                                let on_confirmed = if needs_heat {
+                                    let attempt_s = elapsed_s(start_us);
+                                    match heater_output.set_heater(true, "paused_auto_resume") {
+                                        Ok(()) => {
+                                            let now_s = elapsed_s(start_us);
+                                            lease.set_desired(true, now_s);
+                                            lease.record_success(now_s, true);
+                                            print_actuator_line(
+                                                now_s,
+                                                &lease,
+                                                "resume_on_confirmed",
+                                            );
+                                            true
+                                        }
+                                        Err(error) => {
+                                            warn!("Tasmota resume ON not confirmed: {error:#}");
+                                            let now_s = elapsed_s(start_us);
+                                            lease.record_ambiguous_on_failure(now_s);
+                                            interruption_started_s.get_or_insert(attempt_s);
+                                            supervisor.report_actuator_unready();
+                                            next_actuator_recovery_s =
+                                                now_s + ACTUATOR_RECOVERY_INTERVAL_S;
+                                            print_actuator_line(
+                                                now_s,
+                                                &lease,
+                                                "resume_on_unconfirmed",
+                                            );
+                                            if error
+                                                .downcast_ref::<ContradictoryPowerState>()
+                                                .is_some()
+                                            {
+                                                let outcome = supervisor
+                                                    .report_fault(FaultReason::ActuatorFailed);
+                                                report_supervisor_outcome(
+                                                    now_s, &outcome, &mut mqtt,
+                                                );
+                                            }
+                                            false
+                                        }
+                                    }
+                                } else {
+                                    true
+                                };
+                                if on_confirmed {
+                                    let now_s = elapsed_s(start_us);
+                                    let outcome =
+                                        supervisor.resume_after_actuator_recovery(now_s, &latest);
+                                    report_supervisor_outcome(now_s, &outcome, &mut mqtt);
+                                    if let Some(started_s) = interruption_started_s {
+                                        info!(
+                                            "actuator communication restored after {:.1} s",
+                                            now_s - started_s
+                                        );
+                                    }
+                                    interruption_started_s = None;
+                                }
+                            }
+                            Err(reason) => {
+                                let outcome = supervisor.report_fault(reason);
+                                report_supervisor_outcome(confirmed_at_s, &outcome, &mut mqtt);
+                            }
+                        }
+                    } else {
+                        info!("Tasmota actuator recovered");
+                        interruption_started_s = None;
+                    }
                 }
                 Err(error) => {
                     warn!("Tasmota actuator recovery failed: {error:#}");
-                    lease.record_failure(time_s);
-                    print_actuator_line(elapsed_s(start_us), &lease, "actuator_recovery_failed");
+                    let now_s = elapsed_s(start_us);
+                    lease.record_failure(now_s);
+                    print_actuator_line(now_s, &lease, "actuator_recovery_failed");
+                    if error.downcast_ref::<ContradictoryPowerState>().is_some()
+                        || error.downcast_ref::<RejectedSafetySetting>().is_some()
+                    {
+                        let outcome = supervisor.report_fault(FaultReason::ActuatorFailed);
+                        report_supervisor_outcome(now_s, &outcome, &mut mqtt);
+                    }
                 }
             }
         }
@@ -251,6 +344,9 @@ fn main() -> Result<()> {
                 );
             }
             report_supervisor_outcome(time_s, &outcome, &mut mqtt);
+            if outcome.state == RunState::Idle {
+                interruption_started_s = None;
+            }
         }
 
         if conversion_ready_at_s.is_none() && time_s >= next_probe_sweep_s {
@@ -308,6 +404,17 @@ fn main() -> Result<()> {
             next_safety_tick_s = time_s + SAFETY_TICK_INTERVAL_S;
         }
 
+        if supervisor.state() == RunState::Running
+            && interruption_started_s.is_some()
+            && lease.on_retry_window_expired(elapsed_s(start_us))
+        {
+            let now_s = elapsed_s(start_us);
+            let outcome = supervisor.pause_for_actuator();
+            report_supervisor_outcome(now_s, &outcome, &mut mqtt);
+            lease.set_desired(false, now_s);
+            next_actuator_recovery_s = now_s;
+        }
+
         lease.set_desired(supervisor.desired_heater_on(), time_s);
         run_heater_lease(
             time_s,
@@ -316,11 +423,24 @@ fn main() -> Result<()> {
             &mut heater_output,
             &mut supervisor,
             &mut mqtt,
+            &mut interruption_started_s,
+            &mut next_actuator_recovery_s,
         );
-        show_status(&mut status_led, supervisor.state());
+        show_status(
+            &mut status_led,
+            supervisor.state(),
+            interruption_started_s.is_some() || !supervisor.actuator_ready(),
+        );
         let report_time_s = elapsed_s(start_us);
         if report_time_s >= next_status_s || last_reported_state != Some(supervisor.state()) {
-            print_status(&boot_id, report_time_s, &latest, &supervisor, &lease);
+            print_status(
+                &boot_id,
+                report_time_s,
+                &latest,
+                &supervisor,
+                &lease,
+                interruption_started_s,
+            );
             last_reported_state = Some(supervisor.state());
             next_status_s = report_time_s + STATUS_INTERVAL_S;
         }
@@ -332,6 +452,7 @@ fn main() -> Result<()> {
                 supervisor.desired_heater_on(),
                 &lease,
                 supervisor.actuator_ready(),
+                interruption_started_s,
             );
         }
         maybe_log_runtime_diagnostics(time_s, &mut last_diagnostics_s, last_safety_tick_s);
@@ -343,6 +464,7 @@ fn main() -> Result<()> {
 fn maybe_reconnect_wifi(
     time_s: f32,
     next_attempt_s: &mut f32,
+    was_connected: &mut bool,
     wifi: &mut BlockingWifi<EspWifi<'static>>,
 ) {
     if time_s < *next_attempt_s {
@@ -351,8 +473,14 @@ fn maybe_reconnect_wifi(
     *next_attempt_s = time_s + WIFI_RECONNECT_INTERVAL_S;
 
     match wifi.is_connected() {
-        Ok(true) => {}
+        Ok(true) => {
+            if !*was_connected {
+                info!("Wi-Fi reconnected");
+            }
+            *was_connected = true;
+        }
         Ok(false) => {
+            *was_connected = false;
             warn!("Wi-Fi disconnected; requesting reconnect");
             if let Err(error) = wifi.wifi_mut().connect() {
                 warn!("Wi-Fi reconnect request failed: {error}");
@@ -462,6 +590,8 @@ fn run_heater_lease(
     heater_output: &mut TasmotaHeaterOutput,
     supervisor: &mut RunSupervisor,
     mqtt: &mut Option<MqttTelemetry>,
+    interruption_started_s: &mut Option<f32>,
+    next_actuator_recovery_s: &mut f32,
 ) {
     if !supervisor.actuator_ready() {
         return;
@@ -474,22 +604,58 @@ fn run_heater_lease(
         LeaseAction::SendOff => (false, "safe_off_confirmed", "safe_off_failed"),
     };
 
+    let was_confirmed_off = lease.current_confirmation(time_s) == Some(false);
+    let attempt_started_s = elapsed_s(start_us);
+
     match heater_output.set_heater(on, success_reason) {
         Ok(()) => {
-            lease.record_success(time_s, on);
-            print_actuator_line(elapsed_s(start_us), lease, success_reason);
+            let now_s = elapsed_s(start_us);
+            lease.record_success(now_s, on);
+            if on {
+                *interruption_started_s = None;
+            }
+            print_actuator_line(now_s, lease, success_reason);
         }
         Err(error) => {
             warn!("Tasmota heater command failed: {error:#}");
+            let now_s = elapsed_s(start_us);
             if on {
-                heater_output.attempt_fail_safe_off("lease_failure_safe_off");
-            }
+                if error.downcast_ref::<ContradictoryPowerState>().is_some() {
+                    lease.record_failure(now_s);
+                    let outcome = supervisor.report_fault(FaultReason::ActuatorFailed);
+                    report_supervisor_outcome(now_s, &outcome, mqtt);
+                    lease.set_desired(false, now_s);
+                    *next_actuator_recovery_s = now_s;
+                    print_actuator_line(now_s, lease, "contradictory_on_reply");
+                    return;
+                }
 
-            lease.record_failure(time_s);
-            print_actuator_line(elapsed_s(start_us), lease, failure_reason);
-            let outcome = supervisor.report_fault(FaultReason::ActuatorFailed);
-            report_supervisor_outcome(time_s, &outcome, mqtt);
-            lease.set_desired(false, time_s);
+                lease.record_ambiguous_on_failure(now_s);
+                interruption_started_s.get_or_insert(attempt_started_s);
+                print_actuator_line(now_s, lease, "renewal_reply_missing");
+                if lease.on_retry_window_expired(now_s) {
+                    let outcome = supervisor.pause_for_actuator();
+                    report_supervisor_outcome(now_s, &outcome, mqtt);
+                    lease.set_desired(false, now_s);
+                    *next_actuator_recovery_s = now_s;
+                }
+            } else {
+                lease.record_failure(now_s);
+                print_actuator_line(now_s, lease, failure_reason);
+                if error.downcast_ref::<ContradictoryPowerState>().is_some() {
+                    let outcome = supervisor.report_fault(FaultReason::ActuatorFailed);
+                    report_supervisor_outcome(now_s, &outcome, mqtt);
+                    lease.set_desired(false, now_s);
+                    *next_actuator_recovery_s = now_s;
+                } else if !was_confirmed_off {
+                    interruption_started_s.get_or_insert(attempt_started_s);
+                    let outcome = supervisor.pause_for_actuator();
+                    report_supervisor_outcome(now_s, &outcome, mqtt);
+                    supervisor.report_actuator_unready();
+                    lease.set_desired(false, now_s);
+                    *next_actuator_recovery_s = now_s;
+                }
+            }
         }
     }
 }
@@ -545,6 +711,7 @@ fn print_status(
     latest: &LatestTemperatureReadings,
     supervisor: &RunSupervisor,
     lease: &HeaterLease,
+    interruption_started_s: Option<f32>,
 ) {
     fn probe(value: Option<f32>, updated_at_s: Option<f32>, now_s: f32) -> ProbeStatus {
         ProbeStatus {
@@ -555,7 +722,7 @@ fn print_status(
 
     let fault_reason = match supervisor.state() {
         RunState::Fault(reason) => Some(reason.as_str().to_owned()),
-        RunState::Idle | RunState::Running => None,
+        RunState::Idle | RunState::Running | RunState::Paused => None,
     };
     let status = StatusRecord {
         version: STATUS_VERSION,
@@ -563,6 +730,18 @@ fn print_status(
         uptime_s: time_s,
         run_state: supervisor.state().as_str().to_owned(),
         fault_reason,
+        pause_reason: (supervisor.state() == RunState::Paused)
+            .then(|| "actuator_unreachable".to_owned()),
+        actuator_warning: match supervisor.state() {
+            RunState::Running if interruption_started_s.is_some() => {
+                Some("on_reply_missing".to_owned())
+            }
+            RunState::Idle if !supervisor.actuator_ready() => {
+                Some("configuration_unconfirmed".to_owned())
+            }
+            _ => None,
+        },
+        interruption_started_s: interruption_started_s,
         desired_heater_on: supervisor.desired_heater_on(),
         actuator_ready: supervisor.actuator_ready(),
         confirmed_heater_on: lease.current_confirmation(time_s),
@@ -577,10 +756,15 @@ fn print_status(
     println!("{}", format_status_line(&status));
 }
 
-fn show_status(status_led: &mut Option<StatusLed>, state: RunState) {
+fn show_status(status_led: &mut Option<StatusLed>, state: RunState, retrying: bool) {
+    let status = if matches!(state, RunState::Idle | RunState::Running) && retrying {
+        Status::Retrying
+    } else {
+        state.into()
+    };
     let result = status_led
         .as_mut()
-        .map(|status_led| status_led.show(state.into()));
+        .map(|status_led| status_led.show(status));
     if let Some(Err(error)) = result {
         warn!("status LED failed; continuing with serial status: {error:#}");
         *status_led = None;

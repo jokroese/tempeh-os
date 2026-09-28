@@ -70,6 +70,9 @@ pub enum ConfirmedHeaterState {
     On,
 }
 
+/// Leaves at least 5 seconds of the 20-second plug lease for safe-off recovery.
+pub const ON_RETRY_DEADLINE_S: f32 = 15.0;
+
 impl ConfirmedHeaterState {
     pub fn as_option(self) -> Option<bool> {
         match self {
@@ -89,6 +92,7 @@ pub struct HeaterLease {
     due_at_s: f32,
     last_successful_command_s: Option<f32>,
     last_successful_renewal_s: Option<f32>,
+    ambiguous_on_until_s: Option<f32>,
 }
 
 impl HeaterLease {
@@ -101,6 +105,7 @@ impl HeaterLease {
             due_at_s: 0.0,
             last_successful_command_s: None,
             last_successful_renewal_s: None,
+            ambiguous_on_until_s: None,
         }
     }
 
@@ -120,8 +125,15 @@ impl HeaterLease {
         if self.desired_on {
             self.due_at_s = now_s + self.config.renewal_interval_s;
             LeaseAction::SendOn
-        } else if self.confirmed_state != ConfirmedHeaterState::Off {
-            self.due_at_s = now_s + self.config.renewal_interval_s;
+        } else if self.confirmed_state != ConfirmedHeaterState::Off
+            || self.ambiguous_on_until_s.is_some_and(|until| now_s < until)
+        {
+            self.due_at_s = now_s
+                + if self.ambiguous_on_until_s.is_some_and(|until| now_s < until) {
+                    2.0
+                } else {
+                    self.config.renewal_interval_s
+                };
             LeaseAction::SendOff
         } else {
             LeaseAction::None
@@ -138,12 +150,31 @@ impl HeaterLease {
         self.last_successful_state = Some(on);
         if on {
             self.last_successful_renewal_s = Some(now_s);
+            self.due_at_s = now_s + self.config.renewal_interval_s;
+        } else if self.ambiguous_on_until_s.is_some_and(|until| now_s < until) {
+            self.due_at_s = now_s + 2.0;
         }
     }
 
     pub fn record_failure(&mut self, now_s: f32) {
         self.confirmed_state = ConfirmedHeaterState::Unknown;
-        self.due_at_s = now_s + self.config.renewal_interval_s;
+        self.due_at_s = now_s
+            + if self.ambiguous_on_until_s.is_some_and(|until| now_s < until) {
+                2.0
+            } else {
+                self.config.renewal_interval_s
+            };
+    }
+
+    /// An unanswered ON may still execute after its HTTP request times out.
+    pub fn record_ambiguous_on_failure(&mut self, now_s: f32) {
+        self.record_failure(now_s);
+        self.due_at_s = now_s + 1.0;
+        self.ambiguous_on_until_s = Some(now_s + self.config.lease_duration_s);
+    }
+
+    pub fn ambiguous_on_pending(&self, now_s: f32) -> bool {
+        self.ambiguous_on_until_s.is_some_and(|until| now_s < until)
     }
 
     pub fn desired_heater_on(&self) -> bool {
@@ -195,6 +226,13 @@ impl HeaterLease {
     pub fn lease_expired(&self, now_s: f32) -> bool {
         self.lease_expires_at_s()
             .is_none_or(|expires_at_s| now_s >= expires_at_s)
+    }
+
+    pub fn on_retry_window_expired(&self, now_s: f32) -> bool {
+        self.last_successful_state != Some(true)
+            || self
+                .last_successful_renewal_s
+                .is_none_or(|at| now_s >= at + ON_RETRY_DEADLINE_S)
     }
 }
 
@@ -391,6 +429,65 @@ mod tests {
 
         assert_eq!(lease.poll(4.9), LeaseAction::None);
         assert_eq!(lease.poll(5.0), LeaseAction::SendOn);
+    }
+
+    #[test]
+    fn unanswered_on_retries_soon_without_extending_the_confirmed_lease() {
+        let mut lease = lease();
+        lease.set_desired(true, 0.0);
+        assert_eq!(lease.poll(0.0), LeaseAction::SendOn);
+        lease.record_success(0.0, true);
+        assert_eq!(lease.poll(5.0), LeaseAction::SendOn);
+        lease.record_ambiguous_on_failure(7.0);
+
+        assert_eq!(lease.current_confirmation(7.0), None);
+        assert_eq!(lease.last_successful_renewal_s(), Some(0.0));
+        assert!(!lease.on_retry_window_expired(14.9));
+        assert!(lease.on_retry_window_expired(15.0));
+        assert_eq!(lease.poll(7.9), LeaseAction::None);
+        assert_eq!(lease.poll(8.0), LeaseAction::SendOn);
+        lease.record_success(8.1, true);
+        assert_eq!(lease.last_successful_renewal_s(), Some(8.1));
+        assert_eq!(lease.poll(13.0), LeaseAction::None);
+    }
+
+    #[test]
+    fn first_on_failure_has_no_confirmed_retry_window() {
+        let mut lease = lease();
+        lease.set_desired(true, 0.0);
+        assert_eq!(lease.poll(0.0), LeaseAction::SendOn);
+        lease.record_ambiguous_on_failure(2.0);
+        assert!(lease.on_retry_window_expired(2.0));
+        assert_eq!(lease.current_confirmation(2.0), None);
+    }
+
+    #[test]
+    fn a_confirmed_off_ends_the_previous_on_retry_window() {
+        let mut lease = lease();
+        lease.set_desired(true, 0.0);
+        lease.record_success(0.0, true);
+        lease.set_desired(false, 1.0);
+        lease.record_success(1.0, false);
+        lease.set_desired(true, 2.0);
+        lease.record_ambiguous_on_failure(4.0);
+        assert!(lease.on_retry_window_expired(4.0));
+    }
+
+    #[test]
+    fn unanswered_on_followed_by_stop_repeats_off_for_one_lease() {
+        let mut lease = lease();
+        lease.set_desired(true, 0.0);
+        assert_eq!(lease.poll(0.0), LeaseAction::SendOn);
+        lease.record_ambiguous_on_failure(2.0);
+        lease.set_desired(false, 3.0);
+        assert_eq!(lease.poll(3.0), LeaseAction::SendOff);
+        lease.record_success(3.0, false);
+        assert_eq!(lease.poll(4.9), LeaseAction::None);
+        assert_eq!(lease.poll(5.0), LeaseAction::SendOff);
+        lease.record_success(5.0, false);
+        assert_eq!(lease.poll(21.9), LeaseAction::SendOff);
+        lease.record_success(21.9, false);
+        assert_eq!(lease.poll(22.0), LeaseAction::None);
     }
 
     #[test]

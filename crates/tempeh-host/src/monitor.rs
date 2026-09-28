@@ -27,6 +27,9 @@ pub(crate) struct TemperatureView {
 pub(crate) struct MonitorSnapshot {
     pub run_state: String,
     pub fault_reason: Option<String>,
+    pub pause_reason: Option<String>,
+    pub actuator_warning: Option<String>,
+    pub interruption_age_s: Option<f32>,
     pub desired_heater_on: Option<bool>,
     pub confirmed_heater_on: Option<bool>,
     pub last_confirmed_heater_on: Option<bool>,
@@ -49,6 +52,9 @@ pub(crate) struct MonitorSnapshot {
 pub(crate) struct MonitorState {
     run_state: Option<String>,
     fault_reason: Option<String>,
+    pause_reason: Option<String>,
+    actuator_warning: Option<String>,
+    interruption_started_at_s: Option<f32>,
     desired: Option<bool>,
     current_confirmed: Option<bool>,
     last_confirmed: Option<bool>,
@@ -101,10 +107,18 @@ impl MonitorState {
                 }
                 self.boot_id = Some(status.boot_id.clone());
                 self.fault_reason = None;
+                self.pause_reason = None;
+                self.actuator_warning = None;
+                self.interruption_started_at_s = None;
             }
             self.last_status_s = Some(now_s);
             self.run_state = Some(status.run_state.clone());
             self.fault_reason = status.fault_reason.clone();
+            self.pause_reason = status.pause_reason.clone();
+            self.actuator_warning = status.actuator_warning.clone();
+            self.interruption_started_at_s = status
+                .interruption_started_s
+                .map(|at| now_s - (status.uptime_s - at));
             self.desired = Some(status.desired_heater_on);
             self.current_confirmed = status.confirmed_heater_on;
             self.last_confirmed = status.last_confirmed_heater_on;
@@ -136,8 +150,16 @@ impl MonitorState {
                     self.fault_reason = Some(state.reason.clone());
                 }
                 self.desired = Some(false);
+            } else if state.state == "paused" {
+                self.fault_reason = None;
+                self.pause_reason = Some(state.reason.clone());
+                self.actuator_warning = None;
+                self.desired = Some(false);
             } else {
                 self.fault_reason = None;
+                self.pause_reason = None;
+                self.actuator_warning = None;
+                self.interruption_started_at_s = None;
             }
             if changed || state.state == "fault" {
                 self.event(now_s, "state", format!("{}: {}", state.state, state.reason));
@@ -151,7 +173,15 @@ impl MonitorState {
                 self.last_confirmed = Some(value);
                 self.confirmed_at_s = Some(now_s);
             }
-            self.event(now_s, "actuator", actuator.reason);
+            self.event(now_s, "actuator", actuator.reason.clone());
+            if actuator.reason == "renewal_reply_missing" {
+                self.actuator_warning = Some("on_reply_missing".into());
+                self.interruption_started_at_s.get_or_insert(now_s);
+            } else if actuator.reason == "lease_renewed" || actuator.reason == "resume_on_confirmed"
+            {
+                self.actuator_warning = None;
+                self.interruption_started_at_s = None;
+            }
             return Ok(None);
         }
         if let Some(temp) = parse_temperature_line(line).map_err(|e| format!("{e:?}"))? {
@@ -193,6 +223,11 @@ impl MonitorState {
         MonitorSnapshot {
             run_state: self.run_state.clone().unwrap_or_else(|| "unknown".into()),
             fault_reason: self.fault_reason.clone(),
+            pause_reason: self.pause_reason.clone(),
+            actuator_warning: self.actuator_warning.clone(),
+            interruption_age_s: self
+                .interruption_started_at_s
+                .map(|at| (now_s - at).max(0.0)),
             desired_heater_on: self.desired,
             confirmed_heater_on,
             last_confirmed_heater_on: self.last_confirmed,
@@ -238,6 +273,9 @@ mod tests {
             uptime_s,
             run_state: state.into(),
             fault_reason: (state == "fault").then(|| "actuator_failed".into()),
+            pause_reason: None,
+            actuator_warning: None,
+            interruption_started_s: None,
             desired_heater_on: state == "running",
             actuator_ready: state != "fault",
             confirmed_heater_on: (state == "running").then_some(true),
@@ -330,5 +368,28 @@ mod tests {
         );
         monitor.disconnect(6.0);
         assert!(monitor.snapshot(6.0).disconnected);
+    }
+
+    #[test]
+    fn paused_status_shows_interruption_age_and_auto_resume_clears_it() {
+        let mut paused: serde_json::Value =
+            serde_json::from_str(&status("one", 20.0, "paused")[7..]).unwrap();
+        paused["pause_reason"] = "actuator_unreachable".into();
+        paused["interruption_started_s"] = 12.0.into();
+        let mut monitor = MonitorState::default();
+        monitor.ingest(&format!("status,{paused}"), 100.0).unwrap();
+
+        let view = monitor.snapshot(103.0);
+        assert_eq!(view.run_state, "paused");
+        assert_eq!(view.pause_reason.as_deref(), Some("actuator_unreachable"));
+        assert_eq!(view.interruption_age_s, Some(11.0));
+        assert_eq!(view.desired_heater_on, Some(false));
+
+        monitor
+            .ingest("state,23,running,actuator_recovered_auto_resume", 104.0)
+            .unwrap();
+        let view = monitor.snapshot(104.0);
+        assert_eq!(view.pause_reason, None);
+        assert_eq!(view.interruption_age_s, None);
     }
 }

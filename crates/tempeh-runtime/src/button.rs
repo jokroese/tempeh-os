@@ -62,7 +62,7 @@ impl ButtonReader {
 
         let held_ms = now_ms.wrapping_sub(self.stable_since_ms);
         let command = match state {
-            RunState::Running => Some(RunCommand::Stop),
+            RunState::Running | RunState::Paused => Some(RunCommand::Stop),
             RunState::Idle if held_ms >= self.config.hold_ms => Some(RunCommand::Start),
             RunState::Fault(_) if held_ms >= self.config.hold_ms => {
                 Some(RunCommand::AcknowledgeFault)

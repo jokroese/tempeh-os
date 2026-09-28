@@ -31,6 +31,7 @@ impl FaultReason {
 pub enum RunState {
     Idle,
     Running,
+    Paused,
     Fault(FaultReason),
 }
 
@@ -39,6 +40,7 @@ impl RunState {
         match self {
             Self::Idle => "idle",
             Self::Running => "running",
+            Self::Paused => "paused",
             Self::Fault(_) => "fault",
         }
     }
@@ -124,6 +126,29 @@ impl RunSupervisor {
         self.actuator_ready = true;
     }
 
+    pub fn report_actuator_unready(&mut self) {
+        self.actuator_ready = false;
+    }
+
+    pub fn paused_heater_demand(
+        &self,
+        time_s: f32,
+        latest: &LatestTemperatureReadings,
+    ) -> Result<bool, FaultReason> {
+        if self.state != RunState::Paused {
+            return Ok(false);
+        }
+        self.probes_ready(time_s, latest)?;
+        let mut controller = self.controller.clone();
+        Ok(controller
+            .evaluate_sample(
+                time_s,
+                latest,
+                RealRunUpdate::Probe(TemperatureProbe::BoxAir),
+            )
+            .is_some_and(|sample| sample.heater_on))
+    }
+
     pub fn handle_command(
         &mut self,
         time_s: f32,
@@ -138,7 +163,9 @@ impl RunSupervisor {
                     self.unchanged()
                 }
             }
-            (RunState::Running, RunCommand::Stop) => self.enter(RunState::Idle, "user_stop"),
+            (RunState::Running | RunState::Paused, RunCommand::Stop) => {
+                self.enter(RunState::Idle, "user_stop")
+            }
             (RunState::Fault(_), RunCommand::AcknowledgeFault) => {
                 if self.actuator_ready && self.probes_ready(time_s, latest).is_ok() {
                     self.enter(RunState::Idle, "fault_acknowledged")
@@ -156,12 +183,16 @@ impl RunSupervisor {
         latest: &LatestTemperatureReadings,
         update: RealRunUpdate,
     ) -> SupervisorOutcome {
-        if !self.state.is_running() {
+        if !self.state.is_running() && self.state != RunState::Paused {
             return self.unchanged();
         }
 
         if let Err(reason) = self.probes_ready(time_s, latest) {
             return self.enter(RunState::Fault(reason), reason.as_str());
+        }
+
+        if self.state == RunState::Paused {
+            return self.unchanged();
         }
 
         let sample = self.controller.evaluate_sample(time_s, latest, update);
@@ -186,6 +217,40 @@ impl RunSupervisor {
             return self.unchanged();
         }
         self.enter(RunState::Fault(reason), reason.as_str())
+    }
+
+    pub fn pause_for_actuator(&mut self) -> SupervisorOutcome {
+        if self.state != RunState::Running {
+            return self.unchanged();
+        }
+        self.actuator_ready = false;
+        self.enter(RunState::Paused, "actuator_unreachable")
+    }
+
+    pub fn resume_after_actuator_recovery(
+        &mut self,
+        time_s: f32,
+        latest: &LatestTemperatureReadings,
+    ) -> SupervisorOutcome {
+        if self.state != RunState::Paused || !self.actuator_ready {
+            return self.unchanged();
+        }
+        if let Err(reason) = self.probes_ready(time_s, latest) {
+            return self.enter(RunState::Fault(reason), reason.as_str());
+        }
+        self.state = RunState::Running;
+        let mut outcome = self.tick(
+            time_s,
+            latest,
+            RealRunUpdate::Probe(TemperatureProbe::BoxAir),
+        );
+        if outcome.state == RunState::Running {
+            outcome.state_change = Some(StateChange {
+                state: RunState::Running,
+                reason: "actuator_recovered_auto_resume",
+            });
+        }
+        outcome
     }
 
     fn probes_ready(
@@ -229,7 +294,9 @@ impl RunSupervisor {
 
     fn enter(&mut self, state: RunState, reason: &'static str) -> SupervisorOutcome {
         self.state = state;
-        self.controller = RealRunController::new(self.config.run);
+        if !matches!(state, RunState::Paused) {
+            self.controller = RealRunController::new(self.config.run);
+        }
 
         SupervisorOutcome {
             state,
@@ -455,6 +522,49 @@ mod tests {
             supervisor.state(),
             RunState::Fault(FaultReason::ActuatorFailed)
         );
+    }
+
+    #[test]
+    fn communication_pause_requests_no_heat_and_recovers_without_a_fault() {
+        let latest = fresh_readings(0.0, 20.0);
+        let mut supervisor = started(0.0, &latest);
+        supervisor.tick(0.0, &latest, RealRunUpdate::Probe(TemperatureProbe::BoxAir));
+        assert!(supervisor.desired_heater_on());
+
+        let pause = supervisor.pause_for_actuator();
+        assert_eq!(pause.state, RunState::Paused);
+        assert!(!pause.desired_heater_on);
+        assert!(!supervisor.actuator_ready());
+
+        let recovered = fresh_readings(600.0, 20.0);
+        assert_eq!(supervisor.paused_heater_demand(600.0, &recovered), Ok(true));
+        supervisor.report_actuator_ready();
+        let resumed = supervisor.resume_after_actuator_recovery(600.0, &recovered);
+        assert_eq!(resumed.state, RunState::Running);
+        assert!(resumed.desired_heater_on);
+        assert_eq!(
+            resumed.state_change.unwrap().reason,
+            "actuator_recovered_auto_resume"
+        );
+    }
+
+    #[test]
+    fn stale_or_hot_probe_during_pause_latches_a_safety_fault() {
+        for (time_s, readings, reason) in [
+            (21.0, fresh_readings(0.0, 20.0), FaultReason::BoxAirStale),
+            (
+                1.0,
+                fresh_readings(1.0, 34.0),
+                FaultReason::BoxAirHardCutoff,
+            ),
+        ] {
+            let initial = fresh_readings(0.0, 20.0);
+            let mut supervisor = started(0.0, &initial);
+            supervisor.pause_for_actuator();
+            let outcome = supervisor.tick(time_s, &readings, RealRunUpdate::Tick);
+            assert_eq!(outcome.state, RunState::Fault(reason));
+            assert!(!outcome.desired_heater_on);
+        }
     }
 
     #[test]

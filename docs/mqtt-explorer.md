@@ -111,7 +111,8 @@ Subscribe to `tempeh/tempeh_controller/event` before a run for fault events,
 or before restarting the ESP32 for its boot event. Events are not retained.
 
 `availability` reports the MQTT connection. `state` contains temperatures,
-their ages, run and heater state, actuator readiness, fault reason, uptime and
+their ages, run and heater state, actuator readiness, fault or pause reason,
+retry warning, interruption start time, uptime and
 boot ID. An abbreviated example:
 
 ```json
@@ -122,6 +123,9 @@ boot ID. An abbreviated example:
   "product_age_s": null,
   "run_state": "running",
   "fault_reason": "none",
+  "pause_reason": "none",
+  "actuator_warning": "none",
+  "interruption_started_s": null,
   "desired_heater_on": true,
   "confirmed_heater": "on",
   "last_confirmed_heater": "on",
