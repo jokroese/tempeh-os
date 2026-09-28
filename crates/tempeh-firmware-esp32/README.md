@@ -1,6 +1,16 @@
-# ESP32 Firmware
+# Autonomous ESP32 Firmware
 
-Firmware for the ESP32-S3-DevKitC-1.
+Firmware for the current Nologo ESP32-S3 SuperMini controller. The working
+prototype and recorded no-load check use that board. Other boards
+sold as “SuperMini” need their own checks before use.
+
+The ESP32-S3-DevKitC-1 is the longer-term reference target, not the current
+tested build. Its original revision has an addressable LED on GPIO48 and
+revision 1.1 has it on GPIO38; this firmware currently assumes GPIO48.
+
+For the user-facing sequence from buying parts through a first batch, follow
+the [complete build and use guide](../../docs/getting-started.md). This file is
+the firmware protocol, telemetry and engineering reference.
 
 Reads DS18B20 waterproof probes on separate GPIO pins and runs a supervised heater controller without requiring a laptop.
 
@@ -59,7 +69,7 @@ G     -> probe adapter GND / BLK
 
 The status LED is amber while booting, blue while idle, green while running, and red while faulted. If its RMT driver cannot start, the controller continues with serial status reporting.
 
-## Setup
+## Developer setup
 
 Install the ESP Rust tools:
 
@@ -91,8 +101,9 @@ ESPFLASH_PORT=/dev/cu.usbmodem1234561 cargo run --release
 
 ### MQTT telemetry
 
-MQTT telemetry is optional and read-only. Configure a broker and uncomment this
-section in `firmware.local.toml`:
+MQTT telemetry is optional and read-only. For a small local broker and viewer
+without Home Assistant, follow [Watch your incubator over Wi-Fi](../../docs/mqtt-explorer.md).
+Configure a broker and uncomment this section in `firmware.local.toml`:
 
 ```toml
 [mqtt]
@@ -101,7 +112,7 @@ username = "tempeh-controller"
 password = "replace-with-a-dedicated-mqtt-password"
 device_id = "tempeh_controller"
 device_name = "Tempeh Controller"
-home_assistant_discovery = true
+home_assistant_discovery = false
 ```
 
 Prefer the broker's fixed local IP address. `device_id` must contain only lower-case
@@ -124,7 +135,7 @@ with:
 - actuator readiness;
 - controller uptime.
 
-Set `home_assistant_discovery = false` to use only these generic MQTT topics.
+`home_assistant_discovery = false` uses only these generic MQTT topics.
 
 #### Home Assistant discovery
 
@@ -140,33 +151,36 @@ state changes. The broker receives an `offline` Last Will if the connection is l
 MQTT connection and publishing failures are diagnostic only: they cannot start,
 stop, fault, or delay the local heating supervisor.
 
-Expected serial log after a successful connection includes:
+Expected serial log after a successful generic connection includes:
 
 ```text
-MQTT telemetry starting: broker=mqtt://192.0.2.20:1883, device_id=tempeh_controller, home_assistant_discovery=true
+MQTT telemetry starting: broker=mqtt://192.0.2.20:1883, device_id=tempeh_controller, home_assistant_discovery=false
 MQTT connected
-Home Assistant MQTT discovery published
 ```
 
 If the `[mqtt]` section is absent, MQTT telemetry is disabled and firmware otherwise
 behaves exactly as before.
 
-#### MQTT acceptance check
+#### Optional MQTT check
 
-Keep the heat mat disconnected for this check.
+Use this while changing or troubleshooting MQTT. Ordinary runs do not need it.
+Keep the heat mat disconnected.
 
-1. Flash with the MQTT section configured and confirm all three expected connection
+1. Flash with the MQTT section configured and confirm both expected connection
    messages appear over serial.
 2. Subscribe to `tempeh/tempeh_controller/#` and confirm retained `availability`
    and JSON `state` messages arrive without the laptop serial monitor remaining open.
-3. In Home Assistant, confirm one Tempeh Controller device appears with only the
-   enabled probe entities.
-4. Start and stop a run locally. Confirm run state, heater demand, and confirmed
+3. Start and stop a run locally. Confirm run state, heater demand, and confirmed
    heater values follow the physical controller.
-5. Stop only the MQTT broker. Confirm the ESP32 continues its local control and
+4. Stop only the MQTT broker. Confirm the ESP32 continues its local control and
    Tasmota lease behaviour unchanged.
-6. Restart the broker. Confirm MQTT reconnects, republishes discovery and current
-   state, and Home Assistant marks the device available again.
+5. Restart the broker. Confirm MQTT reconnects and republishes current state.
+
+#### Optional Home Assistant check
+
+With `home_assistant_discovery = true`, confirm one Tempeh Controller device
+appears with only the enabled probe entities. On broker restart, confirm the
+firmware republishes discovery and Home Assistant marks the device available.
 
 At boot, firmware requires Tasmota to confirm all three safety settings before a run can start:
 
@@ -191,16 +205,18 @@ Tasmota PulseTime confirmed: value=120
 state,0,idle,boot_configured
 ```
 
-After flashing, run the host-side smoke test from the repository root:
+After flashing, the host can read probe telemetry without controlling heat:
 
 ```bash
 cargo run -p tempeh-host -- thermometer-test /dev/cu.usbmodem1234561
 ```
 
-For a supervised heat-mat control run from the repository root:
+For autonomous runs, start and stop heating with the ESP32 BOOT button. To show
+and record the firmware's control output without taking over the plug, run from
+the repository root:
 
 ```bash
-cargo run -p tempeh-host -- real-control-test /dev/cu.usbmodem1234561 http://192.0.2.10 out/heat-mat-empty-box-01.csv
+cargo run -p tempeh-host -- monitor /dev/cu.usbmodem1234561
 ```
 
 Expected host output:
@@ -214,22 +230,22 @@ The product_temp_c column remains blank until the product probe has emitted at l
 
 Probe conversion is started and collected in separate phases, allowing the 20 ms main loop to keep polling the button and lease scheduler during the DS18B20 conversion period. A safety tick runs every second so stale readings and hard cut-offs enter a fault independently of new probe samples.
 
-## No-load acceptance check
+## Controller smoke check
 
 Keep the heat mat disconnected for this check.
 
 1. Boot the ESP32 and confirm the LED changes from amber to blue.
-2. Confirm the plug remains off and serial reports `state,0,idle,boot_configured`.
-3. Leave the probes cold for at least 10 seconds. Confirm the plug does not turn on while idle.
-4. Hold BOOT for 2 seconds. Confirm the LED turns green and serial reports `running,user_start`.
-5. Confirm `actuator,...,1,1,lease_renewed` appears approximately every 5 seconds.
-6. Press BOOT once. Confirm the plug turns off, the LED turns blue, and the controller remains idle.
-7. Start again, then disconnect Wi-Fi or power down the ESP32. Confirm the plug turns off no later than 20 seconds after its last renewal.
-8. Restore the controller. Confirm an actuator failure stays red until recovery and a deliberate 2-second acknowledgement.
+2. Confirm the plug remains off and `box_air` reports a plausible temperature.
+3. Hold BOOT for 2 seconds. Confirm the LED turns green and the plug turns on.
+4. Press BOOT once. Confirm the plug turns off and the LED returns to blue.
+5. Start again, then unplug the box-air probe. Confirm the LED turns red and the
+   plug turns off.
+6. Reconnect and acknowledge the fault. Start again, then power down the ESP32
+   or disconnect its Wi-Fi. Confirm the plug turns off within 20 seconds.
 
-Do not connect the heat mat until all eight checks pass.
+Do not connect the heat mat until these checks behave as expected.
 
-### Acceptance result: 9 September 2026
+### Recorded result: 9 September 2026
 
 The no-load check passed on a Nologo ESP32-S3 SuperMini with the `box_air` probe on GPIO13 and the heat mat disconnected:
 
@@ -240,7 +256,9 @@ The no-load check passed on a Nologo ESP32-S3 SuperMini with the `box_air` probe
 - disconnecting the temperature sensor, ESP32 power, or Wi-Fi access point caused the relay to turn off;
 - after Wi-Fi returned, the ESP32 reconnected without rebooting, reapplied the safe Tasmota configuration, remained fault-latched, accepted a deliberate acknowledgement, and completed another start/stop cycle.
 
-Two isolated DS18B20 scratchpad CRC errors were rejected during the network-interruption run, and valid readings resumed afterwards. Check the probe connections before the heated test if CRC errors continue.
+Two isolated DS18B20 scratchpad CRC errors were rejected during the
+network-interruption run, and valid readings resumed afterwards. Inspect the
+probe connections if CRC errors recur.
 
 ## Firmware build checks
 

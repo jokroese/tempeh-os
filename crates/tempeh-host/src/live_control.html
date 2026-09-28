@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Tempeh OS live control</title>
+<title>Tempeh OS live telemetry</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 :root {
@@ -92,8 +92,8 @@ code {
 </head>
 <body>
 <main>
-  <h1>Tempeh OS live control</h1>
-  <p class="sub" id="mode-description">Temperature, controller faults and Tasmota confirmations. A confirmation is evidence from an earlier command, not a live relay measurement.</p>
+  <h1>Tempeh OS live telemetry</h1>
+  <p class="sub">Temperature, controller faults and plug confirmations. A confirmation is evidence from an earlier command, not a live relay measurement.</p>
 
   <section class="cards">
     <div class="card">
@@ -179,7 +179,6 @@ const ids = {
   capturePath: document.getElementById("capture-path"),
   captureError: document.getElementById("capture-error"),
   diagnostics: document.getElementById("diagnostics"),
-  modeDescription: document.getElementById("mode-description"),
   elapsed: document.getElementById("elapsed"),
   sampleCount: document.getElementById("sample-count"),
   streamState: document.getElementById("stream-state"),
@@ -211,9 +210,6 @@ async function updateStatus() {
   ids.capturePath.textContent = status.capture_path ?? "not recording";
   ids.captureError.textContent = status.capture_error ? `Recording failed: ${status.capture_error}` : "";
   const m = status.monitor;
-  if (status.mode === "host_control") {
-    ids.modeDescription.textContent = "Live temperature and requested heat from the supervised host control loop.";
-  }
   ids.controller.textContent = m.run_state;
   const reasons = {
     box_air_stale: "Box-air probe stopped reporting",
@@ -229,9 +225,8 @@ async function updateStatus() {
   ids.plug.textContent = m.confirmed_heater_on === null ? "unknown" : (m.confirmed_heater_on ? "on" : "off");
   ids.plugHistory.textContent = m.last_confirmed_heater_on === null ? "No confirmation recorded"
     : `Last confirmed ${m.last_confirmed_heater_on ? "on" : "off"}${m.confirmation_age_s === null ? " (age unknown)" : ` ${Math.floor(m.confirmation_age_s)} s ago`}`;
-  ids.serialStatus.textContent = status.mode === "host_control" ? "not monitored" :
-    (m.disconnected ? "disconnected" : (m.serial_stale ? "stale" : "receiving"));
-  ids.statusAge.textContent = status.mode === "host_control" ? "" : m.status_age_s === null
+  ids.serialStatus.textContent = m.disconnected ? "disconnected" : (m.serial_stale ? "stale" : "receiving");
+  ids.statusAge.textContent = m.status_age_s === null
     ? "No periodic status yet" : `Controller status ${Math.floor(m.status_age_s)} s old${m.status_stale ? " (stale)" : ""}`;
   for (const [id, probe] of [[ids.latestTemp, m.box_air], [ids.productTemp, m.product], [ids.roomTemp, m.room_air]]) {
     id.textContent = probe.value_c === null ? "—"

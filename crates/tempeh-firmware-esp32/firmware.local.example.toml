@@ -8,7 +8,7 @@ base_url = "http://192.0.2.10"
 [probes]
 box_air = true
 room_air = false
-product = true
+product = false
 
 # Uncomment to publish generic read-only MQTT telemetry.
 # [mqtt]
@@ -17,4 +17,4 @@ product = true
 # password = "replace-with-a-dedicated-mqtt-password"
 # device_id = "tempeh_controller"
 # device_name = "Tempeh Controller"
-# home_assistant_discovery = true
+# home_assistant_discovery = false

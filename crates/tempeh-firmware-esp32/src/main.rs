@@ -76,7 +76,7 @@ impl ProbeConfig {
         let probes = Self {
             box_air: parse_probe_bool(PROBE_BOX_AIR, true),
             room_air: parse_probe_bool(PROBE_ROOM_AIR, false),
-            product: parse_probe_bool(PROBE_PRODUCT, true),
+            product: parse_probe_bool(PROBE_PRODUCT, false),
         };
 
         if !probes.box_air {

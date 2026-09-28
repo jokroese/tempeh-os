@@ -75,7 +75,7 @@ impl Default for ProbeConfig {
         Self {
             box_air: true,
             room_air: false,
-            product: true,
+            product: false,
         }
     }
 }
@@ -129,7 +129,7 @@ impl LocalFirmwareConfig {
             probes: ProbeConfig {
                 box_air: read_toml_bool(&text, "probes", "box_air", true),
                 room_air: read_toml_bool(&text, "probes", "room_air", false),
-                product: read_toml_bool(&text, "probes", "product", true),
+                product: read_toml_bool(&text, "probes", "product", false),
             },
         })
     }
@@ -206,7 +206,7 @@ mod tests {
 
         assert!(read_toml_bool(text, "probes", "box_air", false));
         assert!(!read_toml_bool(text, "probes", "room_air", true));
-        assert!(read_toml_bool(text, "probes", "product", true));
+        assert!(!read_toml_bool(text, "probes", "product", false));
     }
 
     #[test]
