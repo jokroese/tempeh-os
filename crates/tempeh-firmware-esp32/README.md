@@ -1,7 +1,7 @@
 # Autonomous ESP32 Firmware
 
 Firmware for the current Nologo ESP32-S3 SuperMini controller. The working
-prototype and recorded no-load acceptance check use that board. Other boards
+prototype and recorded no-load check use that board. Other boards
 sold as “SuperMini” need their own checks before use.
 
 The ESP32-S3-DevKitC-1 is the longer-term reference target, not the current
@@ -161,9 +161,10 @@ MQTT connected
 If the `[mqtt]` section is absent, MQTT telemetry is disabled and firmware otherwise
 behaves exactly as before.
 
-#### Generic MQTT acceptance check
+#### Optional MQTT check
 
-Keep the heat mat disconnected for this check.
+Use this while changing or troubleshooting MQTT. Ordinary runs do not need it.
+Keep the heat mat disconnected.
 
 1. Flash with the MQTT section configured and confirm both expected connection
    messages appear over serial.
@@ -175,7 +176,7 @@ Keep the heat mat disconnected for this check.
    Tasmota lease behaviour unchanged.
 5. Restart the broker. Confirm MQTT reconnects and republishes current state.
 
-#### Home Assistant acceptance check
+#### Optional Home Assistant check
 
 With `home_assistant_discovery = true`, confirm one Tempeh Controller device
 appears with only the enabled probe entities. On broker restart, confirm the
@@ -229,22 +230,22 @@ The product_temp_c column remains blank until the product probe has emitted at l
 
 Probe conversion is started and collected in separate phases, allowing the 20 ms main loop to keep polling the button and lease scheduler during the DS18B20 conversion period. A safety tick runs every second so stale readings and hard cut-offs enter a fault independently of new probe samples.
 
-## No-load acceptance check
+## Controller smoke check
 
 Keep the heat mat disconnected for this check.
 
 1. Boot the ESP32 and confirm the LED changes from amber to blue.
-2. Confirm the plug remains off and serial reports `state,0,idle,boot_configured`.
-3. Leave the probes cold for at least 10 seconds. Confirm the plug does not turn on while idle.
-4. Hold BOOT for 2 seconds. Confirm the LED turns green and serial reports `running,user_start`.
-5. Confirm `actuator,...,1,1,lease_renewed` appears approximately every 5 seconds.
-6. Press BOOT once. Confirm the plug turns off, the LED turns blue, and the controller remains idle.
-7. Start again, then disconnect Wi-Fi or power down the ESP32. Confirm the plug turns off no later than 20 seconds after its last renewal.
-8. Restore the controller. Confirm an actuator failure stays red until recovery and a deliberate 2-second acknowledgement.
+2. Confirm the plug remains off and `box_air` reports a plausible temperature.
+3. Hold BOOT for 2 seconds. Confirm the LED turns green and the plug turns on.
+4. Press BOOT once. Confirm the plug turns off and the LED returns to blue.
+5. Start again, then unplug the box-air probe. Confirm the LED turns red and the
+   plug turns off.
+6. Reconnect and acknowledge the fault. Start again, then power down the ESP32
+   or disconnect its Wi-Fi. Confirm the plug turns off within 20 seconds.
 
-Do not connect the heat mat until all eight checks pass.
+Do not connect the heat mat until these checks behave as expected.
 
-### Acceptance result: 9 September 2026
+### Recorded result: 9 September 2026
 
 The no-load check passed on a Nologo ESP32-S3 SuperMini with the `box_air` probe on GPIO13 and the heat mat disconnected:
 
@@ -255,7 +256,9 @@ The no-load check passed on a Nologo ESP32-S3 SuperMini with the `box_air` probe
 - disconnecting the temperature sensor, ESP32 power, or Wi-Fi access point caused the relay to turn off;
 - after Wi-Fi returned, the ESP32 reconnected without rebooting, reapplied the safe Tasmota configuration, remained fault-latched, accepted a deliberate acknowledgement, and completed another start/stop cycle.
 
-Two isolated DS18B20 scratchpad CRC errors were rejected during the network-interruption run, and valid readings resumed afterwards. Check the probe connections before the heated test if CRC errors continue.
+Two isolated DS18B20 scratchpad CRC errors were rejected during the
+network-interruption run, and valid readings resumed afterwards. Inspect the
+probe connections if CRC errors recur.
 
 ## Firmware build checks
 

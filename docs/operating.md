@@ -1,22 +1,17 @@
 # Operating an Established Incubator
 
-Use this page only after your exact setup has passed the staged checks in the
-[build guide](getting-started.md). The ESP32 controls the heater locally; a
-laptop is optional monitoring, not a required part of a batch.
+Use this page after the [first-build checks](validation.md). The ESP32 controls
+the heater locally; a laptop is optional monitoring, not a required part of a
+batch.
 
 ## Before loading a batch
 
 1. Inspect the box, heat mat, cables and low-voltage probe wiring. Keep all
    mains equipment and joins outside the humid chamber.
 2. Power the controller and wait for the LED to become blue. Confirm the plug
-   is off and the required box-air probe is reporting a fresh reading in serial
-   or MQTT telemetry.
-3. If the optional product probe is enabled, check that it is below 34 °C. Put
-   the prepared bags and probes in the placements established during the
-   dummy-load test.
-4. Keep the arrangement, bean depth and ventilation within the configuration
-   that you tested. A material change requires the relevant validation checks
-   again.
+   is off. If monitoring is open, glance at the box-air reading to confirm it is
+   plausible.
+3. Put the prepared bags on the rack and position any optional probes.
 
 ## Start, observe and stop
 
@@ -42,8 +37,7 @@ For a red LED, do not restart immediately:
 
 1. Verify that the plug is off. The dashboard shows the last Tasmota command
    confirmation; it is not a live measurement of the relay.
-2. Keep the serial capture from before a reset. In the dashboard, note the fault
-   reason and recent diagnostics.
+2. If monitoring is running, note the fault reason before resetting the ESP32.
 3. Correct the cause: probe and cable, high temperature, Wi-Fi, or plug
    connection.
 4. Hold **BOOT** for two seconds to acknowledge a recovered fault. The LED must

@@ -139,14 +139,13 @@ reconnects and republishes its current state when the broker returns. If the
 laptop changes Wi-Fi network or LAN address, run `just mqtt-setup` with the new
 address, update `broker_url`, and reflash the ESP32.
 
-The optional hardware smoke procedure is currently unrun: with the heat mat
-disconnected, start the broker and ESP32, confirm live updates in MQTT Explorer,
-stop the broker, then confirm reconnect and new updates after restarting it.
+When troubleshooting reconnection, keep the heat mat disconnected, stop the
+broker and confirm that updates resume after starting it again.
 
 ## Optional Home Assistant
 
 If you later use Home Assistant, set `home_assistant_discovery = true` and use
 its MQTT integration. The generic topics above remain unchanged. Run the
-[generic MQTT acceptance check](../crates/tempeh-firmware-esp32/README.md#generic-mqtt-acceptance-check)
-and the [Home Assistant acceptance check](../crates/tempeh-firmware-esp32/README.md#home-assistant-acceptance-check)
+[optional MQTT check](../crates/tempeh-firmware-esp32/README.md#optional-mqtt-check)
+and the [optional Home Assistant check](../crates/tempeh-firmware-esp32/README.md#optional-home-assistant-check)
 separately.

@@ -48,12 +48,11 @@ GND. Connect the DATA line to the GPIO in the reference table.
 1. Put the seedling heat mat outside, under the incubation box.
 2. Put the aluminium/stainless tray or ceramic heat spreader inside the box.
 3. Put the raised rack above the heat spreader.
-4. Place perforated food-contact bags on the rack only after all pre-food tests
-   have passed.
+4. Place perforated food-contact bags on the rack after the first empty-box
+   warm-up.
 5. Hold `box_air` in free air at rack height without touching metal or plastic.
-6. Hold `product` against the outside of the representative bag unless the
-   probe is explicitly rated for food contact. Reproduce the same arrangement
-   in the dummy-load test.
+6. If fitted, hold `product` against the outside of the representative bag
+   unless the probe is explicitly rated for food contact.
 7. If fitted, keep `room_air` outside the box and away from the mat and draughts.
 8. Route probe cables through a small lid gap without crushing them.
 
@@ -86,23 +85,20 @@ If the optional room probe is enabled, the firmware also emits:
 temp,room_air,20.125
 ```
 
-## Required test order
+## First-build checks
 
-1. Complete the firmware no-load check with the heat mat disconnected.
-2. Compare `box_air` and any enabled product probe side by side for at least
-   10 minutes.
-3. Run the supervised empty-box heat test to the 30 °C target.
-4. Run the supervised dummy-load test with the final probe arrangement.
-5. Only then consider a food fermentation.
+1. Complete the controller smoke check with the heat mat disconnected.
+2. Watch one empty-box warm-up to the 30 °C target.
+3. Supervise the first food batch.
 
-Record results in the [validation ladder](../validation.md).
+See the [practical first-build checks](../validation.md) for when to repeat a
+check. Compare probes or use a dummy load only to investigate a specific
+problem.
 
 The no-load firmware check passed on 9 September 2026 using a Nologo ESP32-S3
 SuperMini, not the reference ESP32-S3-DevKitC-1. Sensor loss, ESP32 power loss
 and Wi-Fi loss each resulted in relay-off behaviour. Two isolated DS18B20 CRC
 errors were rejected; inspect the probe connections if errors recur.
 
-The working prototype subsequently completed the probe-comparison, heated
-empty-box, dummy-load and food-batch stages and successfully made tempeh. The
-exact later-test equipment, dates, logs and photographs still need to be added
-to the validation record.
+The working prototype subsequently completed heated empty-box and dummy-load
+runs and successfully made tempeh.

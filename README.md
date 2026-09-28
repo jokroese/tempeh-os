@@ -33,7 +33,7 @@ recorded successful batch. It is the route to use when reproducing the current
 project. Do not assume that every board sold as a “SuperMini” is equivalent.
 
 Start with the **[build and first-batch guide](docs/getting-started.md)** for
-parts, wiring, installation and staged safety checks.
+parts, wiring, installation and practical first-build checks.
 
 For an existing, tested incubator, use the **[operating and troubleshooting
 guide](docs/operating.md)** for each batch, normal stopping and faults.
@@ -53,10 +53,10 @@ An optional third `room_air` probe on GPIO6 records ambient temperature but
 does not control the heater.
 
 The ESP32-S3-DevKitC-1 remains the longer-term reference target because it is
-more consistently identifiable. It has not completed its own recorded physical
-validation. Its addressable LED is on GPIO48 on the original board and GPIO38
-on revision 1.1, while current firmware assumes GPIO48; do not substitute it
-without adapting and retesting the build.
+more consistently identifiable. It has not yet been tested in this project. Its
+addressable LED is on GPIO48 on the original board and GPIO38 on revision 1.1,
+while current firmware assumes GPIO48; adapt the pin and run the controller
+smoke check before using it.
 
 See also:
 
@@ -70,16 +70,11 @@ See also:
 | --- | --- |
 | Automated software checks | Passing locally; CI workflow configured |
 | Autonomous no-load safety check on ESP32-S3 SuperMini | Passed 9 September 2026 |
-| Side-by-side probe comparison on working prototype | Completed |
-| Heated empty-box test on working prototype | Completed |
-| Heated dummy-load test on working prototype | Completed |
-| Full incubation and successful tempeh batch | Completed |
-| Equivalent checks on ESP32-S3-DevKitC-1 | Not yet separately recorded |
+| Empty-box warm-up and successful tempeh batch | Completed |
+| ESP32-S3-DevKitC-1 smoke check | Not yet run |
 
-The exact evidence and acceptance criteria live in
-[`docs/validation.md`](docs/validation.md). The successful batch demonstrates
-the complete system journey; it does not certify the appliance or automatically
-validate different equipment.
+The [first-build checks](docs/validation.md) explain the small set of checks worth
+repeating after relevant changes.
 
 ## Optional monitoring
 

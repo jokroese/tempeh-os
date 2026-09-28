@@ -4,10 +4,9 @@ This is the canonical path for reproducing the current autonomous Tempeh OS
 incubator. Follow the stages in order. Do not skip directly to a food batch.
 
 > [!IMPORTANT]
-> The working prototype has completed the full validation ladder and made a
-> successful tempeh batch. The detailed evidence and photographs still need to
-> be added to the repository. The ESP32-S3-DevKitC-1 has not yet been recorded
-> as a separate repetition; see the [validation status](validation.md).
+> The working SuperMini prototype has completed the first-build checks and made
+> a successful tempeh batch. The ESP32-S3-DevKitC-1 has not yet been tested in
+> this project; see the [current status](validation.md).
 
 ## What you are building
 
@@ -154,10 +153,9 @@ From bottom to top:
 
 Position `box_air` in free air at food height without touching the rack, box or
 bag. If fitted, position `product` against the outside of a representative bag
-unless the probe is explicitly rated for food contact. Use the dummy-load test
-to characterise how closely this placement follows the centre of the mass.
-Route cables without creating a large lid gap; leave the small ventilation gap
-required by the batch procedure.
+unless the probe is explicitly rated for food contact. Route cables without
+creating a large lid gap; leave the small ventilation gap required by the batch
+procedure.
 
 **Checkpoint:** the bags cannot touch the heat spreader and all mains equipment
 and cable joins remain outside the humid chamber.
@@ -231,20 +229,16 @@ Press Ctrl-C to close the flashing monitor before opening another serial tool.
 This only closes the laptop viewer; it does not stop the ESP32. At this stage
 the heat mat must still be disconnected.
 
-## Stage 5: complete the validation ladder
+## Stage 5: check a new build
 
-Complete your own [validation checklist](validation.md#builder-checklist). The
-order is a safety gate, not a suggestion:
+Complete the short [first-build checks](validation.md):
 
-1. no-load firmware check with the heat mat disconnected;
-2. side-by-side probe comparison;
-3. supervised heated empty-box test;
-4. supervised heated dummy-load test;
-5. only then, a first food batch.
+1. run the controller smoke check with the heat mat disconnected;
+2. watch one empty-box warm-up with the final heater and box arrangement;
+3. supervise the first food batch.
 
-Stop if a stage fails. Correct the cause and repeat that stage before moving on.
-The complete eight-step no-load procedure is in the
-[firmware documentation](../crates/tempeh-firmware-esp32/README.md#no-load-acceptance-check).
+Stop and investigate if a check reveals unexpected behaviour. Probe comparison
+and dummy loads are optional tools for diagnosing a specific concern.
 
 ## Stage 6: prepare the tempeh
 
@@ -271,12 +265,12 @@ eat.
 1. Confirm the LED is blue and the required box-air probe is reporting. If the
    optional product probe is enabled, confirm it is reporting and below the 34 °C
    cutoff.
-2. Put the prepared bags on the rack and position the probes as tested during
-   the dummy-load stage.
+2. Put the prepared bags on the rack. Keep `box_air` in free air at food height
+   and place any optional probes as described in the build notes.
 3. Hold **BOOT** for two seconds.
 4. Confirm the LED becomes green.
-5. Supervise a new or materially changed setup and inspect the product according
-   to the food procedure.
+5. Supervise the first batch, or the first after changing the heater or box, and
+   inspect the product according to the food procedure.
 
 The ESP32 targets 30 °C box air. Fermenting tempeh later generates its own heat,
 so product temperature and ventilation remain important even when the heater is
@@ -316,6 +310,6 @@ ready, then follow that procedure for cooling, cooking or storage.
 ## Development and alternative hardware
 
 The Nologo ESP32-S3 SuperMini is the current hands-on development board.
-Alternative boards, probes, enclosures and heaters require their own recorded
-acceptance results. See [development.md](development.md) for simulation, serial
+Alternative boards, probes, enclosures and heaters need the relevant smoke
+check or warm-up. See [development.md](development.md) for simulation, serial
 protocol and monitoring commands.

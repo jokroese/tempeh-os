@@ -9,9 +9,9 @@ DevKitC-1 target. Historical prices and links record what was bought; they are
 not a current shopping basket.
 
 > [!WARNING]
-> The working SuperMini prototype completed the physical validation ladder and
-> made tempeh. The ESP32-S3-DevKitC-1 has not been separately tested. Check the
-> [current status](../validation.md) before substituting equipment.
+> The working SuperMini prototype completed the first-build checks and made
+> tempeh. The ESP32-S3-DevKitC-1 has not yet been tested in this project. Check
+> the [current status](../validation.md) before substituting equipment.
 
 ## Current controller: SuperMini
 
@@ -35,10 +35,10 @@ The DevKitC-1 is the future reference target because it is more consistently
 identified and widely available. It is not yet a validated replacement. Its
 original revision uses GPIO48 for the addressable LED; revision 1.1 uses GPIO38.
 Current firmware uses GPIO48, so revision 1.1 would need a firmware change and
-the relevant tests repeated.
+the controller smoke check.
 
 Do not substitute a generic “ESP32” board without checking every requirement
-and repeating the applicable acceptance tests.
+and running the controller smoke check.
 
 ## Known prototype parts and unspecified parts
 
@@ -93,8 +93,7 @@ Food must not touch the warm-air chamber, heat spreader or heat mat directly.
 
 This is the May 2026 purchase snapshot that produced the first physical
 prototype. It is retained for provenance. It is not the Netherlands reference
-shopping list and some quantities no longer match the current two-required-plus-
-two-probe prototype design.
+shopping list; some quantities reflect the original two-probe prototype.
 
 | Role | Exact item used | Supplier | Original link | Qty | Recorded total | Historical status |
 | --- | --- | --- | --- | ---: | ---: | --- |
@@ -115,6 +114,6 @@ be presented as current Netherlands pricing.
 
 ## Substitution rule
 
-A substitution is acceptable only when its electrical, thermal, dimensional and
-food-contact requirements are explicit. Record the exact substituted part and
-repeat every validation gate it could affect.
+Check the electrical and food-contact requirements of a substitute. Repeat the
+controller smoke check after changing controller hardware, and watch an
+empty-box warm-up after changing the heater or enclosure.
