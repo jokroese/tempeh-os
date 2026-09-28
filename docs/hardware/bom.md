@@ -42,18 +42,18 @@ and repeating the applicable acceptance tests.
 
 ## Known prototype parts and unspecified parts
 
-Quantities describe the two-probe autonomous build. Parts marked “specify” are
-necessary but have not been recorded precisely enough to make this a complete
-shopping list.
+Quantities describe the box-air-only autonomous build plus optional probes.
+Parts marked “specify” are necessary but have not been recorded precisely enough
+to make this a complete shopping list.
 
 | Role | Reference requirement | Qty | Required | Notes |
 | --- | --- | ---: | --- | --- |
 | Controller | Nologo ESP32-S3 SuperMini used in recorded no-load test | 1 | Yes | Current build path; verify its flash, USB and LED details before use |
 | Heater switch | Enclosed EU smart plug supplied with Tasmota; rated for local mains voltage and the heater load | 1 | Yes | Must accept local HTTP commands; do not open a mains plug for this build |
 | Box-air probe | Waterproof DS18B20 probe, 3.0–5.5 V, approximately 1 m cable or longer | 1 | Yes | Controls normal heating; connects to GPIO13 |
-| Product probe | Waterproof DS18B20 probe matching the box-air probe | 1 | Yes | Required safety probe; connects to GPIO4 |
+| Product probe | Waterproof DS18B20 probe matching the box-air probe | 1 | No | Optional independent cutoff; connects to GPIO4 when enabled |
 | Room-air probe | Waterproof DS18B20 probe matching the others | 1 | No | Optional ambient telemetry; connects to GPIO6 |
-| Probe interfaces | DS18B20 adapter modules with pull-ups, or documented 4.7 kΩ pull-ups | 2–3 | Yes for each probe | Original MICREEN kit included adapter modules; exact substitute must be specified |
+| Probe interfaces | DS18B20 adapter modules with pull-ups, or documented 4.7 kΩ pull-ups | 1–3 | Yes for each enabled probe | Original MICREEN kit included adapter modules; exact substitute must be specified |
 | Heater | Plain seedling heat mat, approximately 20–30 W, without its own thermostat | 1 | Yes | Must remain flat and uncovered |
 | Enclosure | Transparent polypropylene box, approximately 40–50 L | 1 | Yes | Outer warm-air chamber only; not a food-contact surface |
 | Heat spreader | Thin aluminium or stainless-steel tray, or ceramic tile, covering most of the heater footprint | 1 | Yes | Goes inside the box above the externally mounted heat mat |
@@ -94,7 +94,7 @@ Food must not touch the warm-air chamber, heat spreader or heat mat directly.
 This is the May 2026 purchase snapshot that produced the first physical
 prototype. It is retained for provenance. It is not the Netherlands reference
 shopping list and some quantities no longer match the current two-required-plus-
-one-optional probe design.
+two-probe prototype design.
 
 | Role | Exact item used | Supplier | Original link | Qty | Recorded total | Historical status |
 | --- | --- | --- | --- | ---: | ---: | --- |

@@ -9,10 +9,11 @@ laptop is optional monitoring, not a required part of a batch.
 1. Inspect the box, heat mat, cables and low-voltage probe wiring. Keep all
    mains equipment and joins outside the humid chamber.
 2. Power the controller and wait for the LED to become blue. Confirm the plug
-   is off and both required probes are reporting fresh readings in serial or
-   MQTT telemetry.
-3. Check that the product temperature is below 34 °C. Put the prepared bags and
-   probes in the placements established during the dummy-load test.
+   is off and the required box-air probe is reporting a fresh reading in serial
+   or MQTT telemetry.
+3. If the optional product probe is enabled, check that it is below 34 °C. Put
+   the prepared bags and probes in the placements established during the
+   dummy-load test.
 4. Keep the arrangement, bean depth and ventilation within the configuration
    that you tested. A material change requires the relevant validation checks
    again.
@@ -26,9 +27,10 @@ laptop is optional monitoring, not a required part of a batch.
 | Green | Running | Inspect the batch according to the food procedure. Press **BOOT** once to stop. |
 | Red | Fault; heat is not requested | Treat the run as stopped and use the fault procedure below. |
 
-The controller targets 30 °C box air and cuts off at 34 °C for box air or
-product. Fermenting tempeh produces its own heat, so the product probe and
-ventilation remain important when the heater is off.
+The controller targets 30 °C box air and cuts off at 34 °C for box air. An
+enabled product probe has its own 34 °C cutoff. Fermenting tempeh produces its
+own heat, so an optional product probe and ventilation remain useful when the
+heater is off.
 
 When the food procedure says the batch is ready, press **BOOT** once. Confirm
 blue idle and the plug off before removing the product. The controller has no

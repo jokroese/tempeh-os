@@ -7,10 +7,11 @@ are comfortable with low-voltage wiring and a terminal.
 
 ## What it does
 
-The ESP32 reads the incubator and product temperatures, decides when heat is
-needed and renews a short lease on the Tasmota plug. If the ESP32, Wi-Fi,
-temperature probe or control loop fails, the plug stops heating when the lease
-expires. A laptop is not required during incubation.
+The ESP32 reads incubator temperature, decides when heat is needed and renews a
+short lease on the Tasmota plug. An optional product probe adds a second
+temperature cutoff. If the ESP32, Wi-Fi, box-air probe or control loop fails,
+the plug stops heating when the lease expires. A laptop is not required during
+incubation.
 
 ```mermaid
 flowchart LR
@@ -21,9 +22,9 @@ flowchart LR
     E -. optional telemetry .-> M[Laptop or MQTT]
 ```
 
-The controller targets **30 °C** box air and cuts off heat at **34 °C** box or
-product temperature. Starting always requires a deliberate two-second button
-hold.
+The controller targets **30 °C** box air and cuts off heat at **34 °C** box
+air. An enabled product probe also cuts off at 34 °C. Starting always requires a
+deliberate two-second button hold.
 
 ## Choose your route
 
@@ -42,10 +43,11 @@ For simulations, serial diagnostics and engineering experiments, use the
 
 ## Current controller wiring
 
-The current SuperMini build uses two required DS18B20 probes:
+The current SuperMini build needs one DS18B20 probe:
 
 - `box_air` on GPIO13 controls normal heating;
-- `product` on GPIO4 provides an independent product-temperature safety limit.
+- optional `product` on GPIO4 provides an independent product-temperature
+  safety limit.
 
 An optional third `room_air` probe on GPIO6 records ambient temperature but
 does not control the heater.
@@ -104,10 +106,9 @@ path.
 
 ## Development
 
-Simulation, host-actuated experiments, firmware build details and repository
-structure are documented in [the development guide](docs/development.md). The
-older laptop-driven control route is retained for controlled engineering work;
-it is not the recommended way to incubate tempeh.
+Simulation, firmware build details and repository structure are documented in
+[the development guide](docs/development.md). The host tools do not actuate the
+plug; the ESP32 is the only supported heater controller.
 
 ```bash
 cargo test

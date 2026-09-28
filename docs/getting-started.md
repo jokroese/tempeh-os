@@ -15,7 +15,7 @@ The current build uses:
 
 - the Nologo ESP32-S3 SuperMini used in the recorded no-load test;
 - one required `box_air` DS18B20 probe on GPIO13;
-- one required `product` DS18B20 probe on GPIO4;
+- an optional `product` DS18B20 probe on GPIO4;
 - an optional `room_air` DS18B20 probe on GPIO6;
 - a Tasmota-compatible EU smart plug;
 - a plain 20–30 W seedling heat mat beneath a 40–50 L incubation box;
@@ -111,9 +111,9 @@ flowchart LR
     V[ESP32 3V3] --> BV[box_air VCC]
     G[ESP32 GND] --> BG[box_air GND]
     D13[ESP32 GPIO13] --> BD[box_air DATA]
-    V --> PV[product VCC]
-    G --> PG[product GND]
-    D4[ESP32 GPIO4] --> PD[product DATA]
+    V -. optional .-> PV[product VCC]
+    G -. optional .-> PG[product GND]
+    D4[ESP32 GPIO4] -. optional .-> PD[product DATA]
     V -. optional .-> RV[room_air VCC]
     G -. optional .-> RG[room_air GND]
     D6[ESP32 GPIO6] -. optional .-> RD[room_air DATA]
@@ -131,10 +131,12 @@ Wire colours are not a universal guarantee. Check the documentation supplied
 with each probe before applying power. The prototype adapter modules include the
 required pull-up; a bare DS18B20 normally needs a pull-up resistor.
 
-Label the two required probes physically before continuing:
+Label the required probe physically before continuing:
 
 - **BOX AIR — GPIO13**
-- **PRODUCT — GPIO4**
+
+If fitted, also label **PRODUCT — GPIO4**. An enabled product probe adds an
+independent 34 °C cutoff; it is not required for the controller to operate.
 
 **Checkpoint:** the low-voltage wiring matches the table, no bare conductors can
 short, and the heat mat remains disconnected.
@@ -151,10 +153,10 @@ From bottom to top:
    pass.
 
 Position `box_air` in free air at food height without touching the rack, box or
-bag. Position `product` against the outside of a representative bag unless the
-probe is explicitly rated for food contact. Use the dummy-load test to
-characterise how closely this placement follows the centre of the mass. Route
-cables without creating a large lid gap; leave the small ventilation gap
+bag. If fitted, position `product` against the outside of a representative bag
+unless the probe is explicitly rated for food contact. Use the dummy-load test
+to characterise how closely this placement follows the centre of the mass.
+Route cables without creating a large lid gap; leave the small ventilation gap
 required by the batch procedure.
 
 **Checkpoint:** the bags cannot touch the heat spreader and all mains equipment
@@ -197,7 +199,7 @@ base_url = "http://192.168.1.50"
 [probes]
 box_air = true
 room_air = false
-product = true
+product = false
 ```
 
 The local file contains secrets, is excluded from Git and is compiled into the
@@ -266,8 +268,9 @@ eat.
 
 ## Stage 7: start and supervise incubation
 
-1. Confirm the LED is blue, both required probes are reporting and the product
-   temperature is below the 34 °C cutoff.
+1. Confirm the LED is blue and the required box-air probe is reporting. If the
+   optional product probe is enabled, confirm it is reporting and below the 34 °C
+   cutoff.
 2. Put the prepared bags on the rack and position the probes as tested during
    the dummy-load stage.
 3. Hold **BOOT** for two seconds.
@@ -315,4 +318,4 @@ ready, then follow that procedure for cooling, cooking or storage.
 The Nologo ESP32-S3 SuperMini is the current hands-on development board.
 Alternative boards, probes, enclosures and heaters require their own recorded
 acceptance results. See [development.md](development.md) for simulation, serial
-protocol and legacy host-control commands.
+protocol and monitoring commands.

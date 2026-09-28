@@ -6,13 +6,13 @@ original prototype.
 
 ## Reference board and probes
 
-The current controller is a **Nologo ESP32-S3 SuperMini** with two required probes
-and one optional probe:
+The current controller is a **Nologo ESP32-S3 SuperMini** with one required probe
+and two optional probes:
 
 | Probe | Required | Role | DATA pin |
 | --- | --- | --- | --- |
 | `box_air` | Yes | Air temperature at food height; normal heater control | GPIO13 |
-| `product` | Yes | Representative bean/bag temperature; hard safety cutoff | GPIO4 |
+| `product` | No | Representative bean/bag temperature; independent hard safety cutoff when enabled | GPIO4 |
 | `room_air` | No | Ambient context only | GPIO6 |
 
 The built-in BOOT button is on GPIO0 and the tested status LED is on GPIO48.
@@ -89,7 +89,8 @@ temp,room_air,20.125
 ## Required test order
 
 1. Complete the firmware no-load check with the heat mat disconnected.
-2. Compare the required probes side by side for at least 10 minutes.
+2. Compare `box_air` and any enabled product probe side by side for at least
+   10 minutes.
 3. Run the supervised empty-box heat test to the 30 °C target.
 4. Run the supervised dummy-load test with the final probe arrangement.
 5. Only then consider a food fermentation.

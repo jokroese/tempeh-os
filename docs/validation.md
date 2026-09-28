@@ -53,11 +53,12 @@ Stop here if any outcome differs. Correct the cause and repeat the whole check.
 
 ### 2. Side-by-side probe comparison
 
-Put the two required probes together in stable room air for at least 10 minutes.
-Record every reading, the largest difference and any intermittent errors. The
-project does not yet publish a measured acceptance threshold for the exact probe
-and mounting combination, so do not invent one from the 34 °C safety cutoff.
-Investigate drift, disagreement or recurring CRC errors before adding heat.
+If you enable the optional product probe, put it beside the box-air probe in
+stable room air for at least 10 minutes. Record every reading, the largest
+difference and any intermittent errors. The project does not yet publish a
+measured acceptance threshold for the exact probe and mounting combination, so
+do not invent one from the 34 °C safety cutoff. Investigate drift, disagreement
+or recurring CRC errors before adding heat.
 
 ### 3. Supervised empty-box test
 
@@ -69,10 +70,10 @@ to the observed behaviour you are prepared to accept before moving on.
 
 ### 4. Supervised dummy-load test
 
-Use a representative safe dummy load with the intended bag depth, ventilation,
-rack and product-probe placement. Record the relation between box-air and
-product readings, temperature trend, interventions and log. Do not proceed to
-food until you understand how the external product probe follows the mass.
+Use a representative safe dummy load with the intended bag depth, ventilation
+and rack. If the optional product probe is enabled, use its intended placement
+and record how its reading follows the mass. Record the temperature trend,
+interventions and log before proceeding to food.
 
 ### 5. First food batch
 
