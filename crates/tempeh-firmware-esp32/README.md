@@ -124,16 +124,22 @@ The stable device interface is ordinary MQTT, independent of Home Assistant:
 ```text
 tempeh/tempeh_controller/availability
 tempeh/tempeh_controller/state
+tempeh/tempeh_controller/event
 ```
 
-Both topics are retained and use QoS 1. The state topic contains one JSON object
-with:
+All topics use QoS 1. `availability` and `state` are retained; `event` is not.
+The state snapshot includes probe temperatures and ages, run and fault state,
+heater demand and confirmation, actuator readiness, uptime and boot ID. Ages
+are measured at publication and are `null` until the first reading or
+successful heater command. `confirmed_heater` becomes `unknown` when its lease
+expires; `last_confirmed_heater` keeps the historical reply.
 
-- enabled probe temperatures;
-- run state and fault reason;
-- requested and Tasmota-confirmed heater state;
-- actuator readiness;
-- controller uptime.
+Events report `boot`, `fault_raised` and `fault_cleared` with a per-boot
+`event_id`, uptime and fault reason. Fault clearance follows acknowledgement.
+The ESP32 buffers 16 unsent events through broker outages, dropping the oldest
+if full; a reboot clears the buffer. The retained state remains authoritative
+for the current fault. See the [MQTT Explorer guide](../../docs/mqtt-explorer.md)
+for payload examples and freshness guidance.
 
 `home_assistant_discovery = false` uses only these generic MQTT topics.
 
@@ -175,6 +181,8 @@ Keep the heat mat disconnected.
 4. Stop only the MQTT broker. Confirm the ESP32 continues its local control and
    Tasmota lease behaviour unchanged.
 5. Restart the broker. Confirm MQTT reconnects and republishes current state.
+6. Subscribe to `event` before rebooting or inducing a safe fault. Confirm
+   boot, fault and clearance events, and delivery after broker reconnection.
 
 #### Optional Home Assistant check
 

@@ -196,7 +196,7 @@ fn main() -> Result<()> {
         "control output: control,time_s,room_air_temp_c,box_air_temp_c,product_temp_c,heater_on,reason"
     );
 
-    let mut mqtt = match MqttTelemetry::from_build_config(probes) {
+    let mut mqtt = match MqttTelemetry::from_build_config(probes, &boot_id, supervisor.state()) {
         Ok(telemetry) => telemetry,
         Err(error) => {
             warn!("MQTT unavailable; continuing without telemetry: {error:#}");
@@ -250,7 +250,7 @@ fn main() -> Result<()> {
                     "button command {command:?} rejected because safety conditions are not ready"
                 );
             }
-            print_supervisor_outcome(time_s, &outcome);
+            report_supervisor_outcome(time_s, &outcome, &mut mqtt);
         }
 
         if conversion_ready_at_s.is_none() && time_s >= next_probe_sweep_s {
@@ -278,6 +278,7 @@ fn main() -> Result<()> {
                 time_s,
                 &mut latest,
                 &mut supervisor,
+                &mut mqtt,
             );
             finish_probe_conversion(
                 TemperatureProbe::RoomAir,
@@ -286,6 +287,7 @@ fn main() -> Result<()> {
                 time_s,
                 &mut latest,
                 &mut supervisor,
+                &mut mqtt,
             );
             finish_probe_conversion(
                 TemperatureProbe::Product,
@@ -294,13 +296,14 @@ fn main() -> Result<()> {
                 time_s,
                 &mut latest,
                 &mut supervisor,
+                &mut mqtt,
             );
             conversion_ready_at_s = None;
         }
 
         if time_s >= next_safety_tick_s {
             let outcome = supervisor.tick(time_s, &latest, RealRunUpdate::Tick);
-            print_supervisor_outcome(time_s, &outcome);
+            report_supervisor_outcome(time_s, &outcome, &mut mqtt);
             last_safety_tick_s = time_s;
             next_safety_tick_s = time_s + SAFETY_TICK_INTERVAL_S;
         }
@@ -312,6 +315,7 @@ fn main() -> Result<()> {
             &mut lease,
             &mut heater_output,
             &mut supervisor,
+            &mut mqtt,
         );
         show_status(&mut status_led, supervisor.state());
         let report_time_s = elapsed_s(start_us);
@@ -326,7 +330,7 @@ fn main() -> Result<()> {
                 &latest,
                 supervisor.state(),
                 supervisor.desired_heater_on(),
-                lease.current_confirmation(report_time_s),
+                &lease,
                 supervisor.actuator_ready(),
             );
         }
@@ -427,6 +431,7 @@ fn finish_probe_conversion(
     time_s: f32,
     latest: &mut LatestTemperatureReadings,
     supervisor: &mut RunSupervisor,
+    mqtt: &mut Option<MqttTelemetry>,
 ) {
     if !*conversion_started {
         return;
@@ -442,7 +447,7 @@ fn finish_probe_conversion(
             println!("temp,{},{temp_c:.3}", probe_name(probe_kind));
             latest.update_at(time_s, probe_kind, temp_c);
             let outcome = supervisor.tick(time_s, latest, RealRunUpdate::Probe(probe_kind));
-            print_supervisor_outcome(time_s, &outcome);
+            report_supervisor_outcome(time_s, &outcome, mqtt);
         }
         Err(error) => {
             warn!("{probe_kind:?} read failed: {error:#}");
@@ -456,6 +461,7 @@ fn run_heater_lease(
     lease: &mut HeaterLease,
     heater_output: &mut TasmotaHeaterOutput,
     supervisor: &mut RunSupervisor,
+    mqtt: &mut Option<MqttTelemetry>,
 ) {
     if !supervisor.actuator_ready() {
         return;
@@ -482,9 +488,20 @@ fn run_heater_lease(
             lease.record_failure(time_s);
             print_actuator_line(elapsed_s(start_us), lease, failure_reason);
             let outcome = supervisor.report_fault(FaultReason::ActuatorFailed);
-            print_supervisor_outcome(time_s, &outcome);
+            report_supervisor_outcome(time_s, &outcome, mqtt);
             lease.set_desired(false, time_s);
         }
+    }
+}
+
+fn report_supervisor_outcome(
+    time_s: f32,
+    outcome: &SupervisorOutcome,
+    mqtt: &mut Option<MqttTelemetry>,
+) {
+    print_supervisor_outcome(time_s, outcome);
+    if let (Some(change), Some(mqtt)) = (outcome.state_change, mqtt.as_mut()) {
+        mqtt.observe_state_change(time_s, change.state);
     }
 }
 

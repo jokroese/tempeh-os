@@ -160,7 +160,7 @@ Optional observability follows a separate, one-way path:
 
 ```text
 RunSupervisor + latest probes + HeaterLease
-  -> generic retained MQTT availability and state
+  -> generic retained MQTT availability and state, plus unretained events
   -> optional Home Assistant discovery adapter
   -> Home Assistant Recorder, Node-RED, openHAB, or another consumer
 ```

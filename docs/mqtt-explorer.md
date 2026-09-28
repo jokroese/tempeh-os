@@ -100,35 +100,52 @@ Create a connection in MQTT Explorer with:
 | Password | The password chosen during setup |
 | Transport | MQTT over plain TCP |
 
-After the ESP32 connects, open these retained topics:
+After the ESP32 connects, open the retained topics:
 
 ```text
 tempeh/tempeh_controller/availability
 tempeh/tempeh_controller/state
 ```
 
-`availability` is `online` while the ESP32 has an MQTT connection. `state` is a
-JSON snapshot containing enabled temperatures, run and fault state, requested
-heat, the last plug confirmation, actuator readiness and controller uptime.
-For example, this **sample message** illustrates the viewer; it is not a
-hardware test:
+Subscribe to `tempeh/tempeh_controller/event` before a run for fault events,
+or before restarting the ESP32 for its boot event. Events are not retained.
+
+`availability` reports the MQTT connection. `state` contains temperatures,
+their ages, run and heater state, actuator readiness, fault reason, uptime and
+boot ID. An abbreviated example:
 
 ```json
 {
   "box_air_temp_c": 29.8,
+  "box_air_age_s": 1.2,
   "product_temp_c": null,
+  "product_age_s": null,
   "run_state": "running",
   "fault_reason": "none",
   "desired_heater_on": true,
   "confirmed_heater": "on",
-  "actuator_ready": true,
+  "last_confirmed_heater": "on",
+  "confirmation_age_s": 2.3,
+  "lease_duration_s": 20.0,
+  "boot_id": "7e4a836c284317a9",
   "uptime_s": 123
 }
 ```
 
-MQTT Explorer shows messages and the latest retained values. It does not keep a
-complete batch history. A value may be retained from before the viewer opened;
-use its uptime and the next live update to judge recency. For probe freshness,
+An age is measured when `state` is published; a retained snapshot does not keep
+ageing. `null` means no reading or successful heater command yet. Temperatures
+can remain visible when stale. `confirmed_heater` becomes `unknown` when its
+lease expires; `last_confirmed_heater` preserves the previous reply. A new
+`boot_id` means the ESP32 restarted.
+
+Events have `event_type` (`boot`, `fault_raised`, `fault_cleared`), `boot_id`,
+`sequence`, `uptime_s` and `fault_reason`. `event_id` combines boot ID and
+sequence to identify possible QoS 1 duplicates. Up to 16 unsent events survive
+a broker outage in memory; older events are dropped if the buffer fills, and
+unsent events are lost on reboot. A fault clears after acknowledgement.
+
+MQTT Explorer does not keep a complete history. Check `availability`, message
+receive time and the next live update before trusting a retained snapshot. For
 serial warnings and a complete capture, use
 [USB monitoring](development.md#monitor-faults-and-keep-serial-evidence).
 
