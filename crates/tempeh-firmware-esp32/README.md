@@ -1,6 +1,16 @@
-# ESP32 Firmware
+# Autonomous ESP32 Firmware
 
-Firmware for the ESP32-S3-DevKitC-1.
+Firmware for the current Nologo ESP32-S3 SuperMini controller. The working
+prototype and recorded no-load acceptance check use that board. Other boards
+sold as “SuperMini” need their own checks before use.
+
+The ESP32-S3-DevKitC-1 is the longer-term reference target, not the current
+tested build. Its original revision has an addressable LED on GPIO48 and
+revision 1.1 has it on GPIO38; this firmware currently assumes GPIO48.
+
+For the user-facing sequence from buying parts through a first batch, follow
+the [complete build and use guide](../../docs/getting-started.md). This file is
+the firmware protocol, telemetry and engineering reference.
 
 Reads DS18B20 waterproof probes on separate GPIO pins and runs a supervised heater controller without requiring a laptop.
 
@@ -59,7 +69,7 @@ G     -> probe adapter GND / BLK
 
 The status LED is amber while booting, blue while idle, green while running, and red while faulted. If its RMT driver cannot start, the controller continues with serial status reporting.
 
-## Setup
+## Developer setup
 
 Install the ESP Rust tools:
 
@@ -191,16 +201,18 @@ Tasmota PulseTime confirmed: value=120
 state,0,idle,boot_configured
 ```
 
-After flashing, run the host-side smoke test from the repository root:
+After flashing, the host can read probe telemetry without controlling heat:
 
 ```bash
 cargo run -p tempeh-host -- thermometer-test /dev/cu.usbmodem1234561
 ```
 
-For a supervised heat-mat control run from the repository root:
+For autonomous runs, start and stop heating with the ESP32 BOOT button. To show
+and record the firmware's control output without taking over the plug, run from
+the repository root:
 
 ```bash
-cargo run -p tempeh-host -- real-control-test /dev/cu.usbmodem1234561 http://192.0.2.10 out/heat-mat-empty-box-01.csv
+cargo run -p tempeh-host -- monitor /dev/cu.usbmodem1234561
 ```
 
 Expected host output:

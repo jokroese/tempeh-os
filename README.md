@@ -1,259 +1,113 @@
 # Tempeh OS
 
-A project for modelling and eventually controlling a low-cost tempeh incubator.
+An autonomous, low-cost tempeh incubator controller built around an
+ESP32-S3, temperature probes and a fail-safe Tasmota smart plug. It is for
+people who want to make tempeh with a small, locally controlled incubator and
+are comfortable with low-voltage wiring and a terminal.
 
-## Hardware
+## What it does
 
-The physical prototype is documented in `docs/hardware/`. Hardware v0 is a prototype. It uses a SAMLA storage box as the warm-air chamber, while food remains inside perforated food-contact ISTAD bags.
+The ESP32 reads the incubator and product temperatures, decides when heat is
+needed and renews a short lease on the Tasmota plug. If the ESP32, Wi-Fi,
+temperature probe or control loop fails, the plug stops heating when the lease
+expires. A laptop is not required during incubation.
 
-## Crates
-
-- `tempeh-model` owns the vocabulary.
-- `tempeh-control` owns the decisions.
-- `tempeh-sim` owns the imaginary physics.
-- `tempeh-runtime` owns real-run safety and heater decision policy.
-- `tempeh-protocol` owns shared text protocols such as `temp,<probe>,<°C>` lines.
-- `tempeh-pet` owns the mycelial status report.
-- `tempeh-host` owns the laptop-side CLI, serial reader, CSV logging, Tasmota HTTP control, and live UI.
-- `tempeh-firmware-esp32` owns ESP32-side probe reading and on-device real-run policy evaluation.
-
-## Architecture
-
-See [`docs/architecture.md`](docs/architecture.md) for crate responsibilities, the current host/firmware control boundary, and the path towards laptop-free operation.
-
-## Run
-
-```bash
-cargo run -p tempeh-host -- html
-open out/sim.html
+```mermaid
+flowchart LR
+    P[Temperature probes] --> E[ESP32-S3 controller]
+    B[Start / stop button] --> E
+    E -->|renewable 20 s lease| T[Tasmota smart plug]
+    T --> H[Heat mat]
+    E -. optional telemetry .-> M[Laptop or MQTT]
 ```
 
-## CSV
+The controller targets **30 °C** box air and cuts off heat at **34 °C** box or
+product temperature. Starting always requires a deliberate two-second button
+hold.
 
-```bash
-cargo run -p tempeh-host -- csv
-```
+## Choose your route
 
-## Simulated control loop
+The current hands-on build uses the **Nologo ESP32-S3 SuperMini** that made the
+recorded successful batch. It is the route to use when reproducing the current
+project. Do not assume that every board sold as a “SuperMini” is equivalent.
 
-```bash
-cargo run -p tempeh-host -- control
-```
+Start with the **[build and first-batch guide](docs/getting-started.md)** for
+parts, wiring, installation and staged safety checks.
 
-## Tasmota plug test
+For an existing, tested incubator, use the **[operating and troubleshooting
+guide](docs/operating.md)** for each batch, normal stopping and faults.
 
-`plug-test` checks that the plug responds: on, wait two seconds, off.
+For simulations, serial diagnostics and engineering experiments, use the
+**[development guide](docs/development.md)**.
 
-```bash
-cargo run -p tempeh-host -- plug-test http://192.0.2.10
-```
+## Current controller wiring
 
-`trace-control-test` checks the full controller path using fake temperature readings:
+The current SuperMini build uses two required DS18B20 probes:
 
-```
-TemperatureTrace -> TraceThermometer -> Controller -> TasmotaHeater
-```
+- `box_air` on GPIO13 controls normal heating;
+- `product` on GPIO4 provides an independent product-temperature safety limit.
 
-```bash
-cargo run -p tempeh-host -- trace-control-test http://192.0.2.10
-```
+An optional third `room_air` probe on GPIO6 records ambient temperature but
+does not control the heater.
 
-## ESP32 temperature bridge firmware
+The ESP32-S3-DevKitC-1 remains the longer-term reference target because it is
+more consistently identifiable. It has not completed its own recorded physical
+validation. Its addressable LED is on GPIO48 on the original board and GPIO38
+on revision 1.1, while current firmware assumes GPIO48; do not substitute it
+without adapting and retesting the build.
 
-The ESP32 must be flashed before thermometer-test can read real serial data.
+See also:
 
-The firmware lives in:
+- [reference hardware and original Spanish purchase record](docs/hardware/bom.md);
+- [current validation status](docs/validation.md);
+- [prototype safety notes](docs/hardware/safety.md).
 
-```
-crates/tempeh-firmware-esp32
-```
+## Current status
 
-Install the ESP Rust tools:
+| Milestone | Status |
+| --- | --- |
+| Automated software checks | Passing locally; CI workflow configured |
+| Autonomous no-load safety check on ESP32-S3 SuperMini | Passed 9 September 2026 |
+| Side-by-side probe comparison on working prototype | Completed |
+| Heated empty-box test on working prototype | Completed |
+| Heated dummy-load test on working prototype | Completed |
+| Full incubation and successful tempeh batch | Completed |
+| Equivalent checks on ESP32-S3-DevKitC-1 | Not yet separately recorded |
 
-```bash
-cargo install espup
-espup install
-cargo install espflash
-```
+The exact evidence and acceptance criteria live in
+[`docs/validation.md`](docs/validation.md). The successful batch demonstrates
+the complete system journey; it does not certify the appliance or automatically
+validate different equipment.
 
-Load the ESP toolchain environment in the current shell:
+## Optional monitoring
 
-```bash
-. ~/export-esp.sh
-```
-
-Flash and monitor the ESP32-S3 (from the firmware crate directory):
-
-```bash
-cd crates/tempeh-firmware-esp32
-cp firmware.local.example.toml firmware.local.toml
-```
-
-Edit `firmware.local.toml`:
-
-```toml
-[wifi]
-ssid = "your-wifi-name"
-password = "your-wifi-password"
-
-[tasmota]
-base_url = "http://192.0.2.10"
-```
-
-Then, from within `crates/tempeh-firmware-esp32`:
-
-```bash
-ESPFLASH_PORT=/dev/cu.usbmodem1234561 cargo run --release
-```
-
-On boot, the ESP32 confirms Tasmota `Power Off`, `PowerOnState 0`, and a 20-second `PulseTime`, then remains idle. Hold the built-in BOOT button for 2 seconds to start a supervised run. While heat is requested, the ESP32 renews the plug-side lease every 5 seconds; press BOOT once to stop.
-
-The firmware currently reads three DS18B20 probes on separate pins:
-
-```
-temp,box_air,22.437
-temp,room_air,20.125
-temp,product,23.125
-```
-
-Probe GPIO mapping: box_air → GPIO13, room_air → GPIO6, product → GPIO4.
-
-The firmware also runs the shared real-run policy on device and emits diagnostic control rows:
-
-```text
-control,time_s,room_air_temp_c,box_air_temp_c,product_temp_c,heater_on,reason
-control,1,,22.437,23.125,1,below_target
-```
-
-The firmware actuates the configured Tasmota plug directly. The laptop is optional
-and can monitor `temp`, `control`, `state`, `actuator`, and periodic `status` records
-over USB serial.
-Optionally, the firmware publishes generic read-only MQTT telemetry, with Home
-Assistant discovery as a separate adapter. MQTT remains outside the heater control
-and safety path. See the
-[firmware setup](crates/tempeh-firmware-esp32/README.md#mqtt-telemetry).
-
-## Monitor faults and keep serial evidence
-
-Run `just monitor <port>` (or `cargo run -p tempeh-host -- monitor <port>`)
-and open `http://127.0.0.1:8787`. Monitor mode only observes the autonomous
-controller; it does not send Tasmota commands. To replay a serial fixture without
-hardware, use `cargo run -p tempeh-host -- monitor - <csv-path>` and pipe the
-fixture into stdin.
-
-The browser separates **heat requested** from **plug confirmation**. Confirmation
-means a Tasmota command reply, not a live relay measurement. Firmware limits its
-reporting validity to one lease duration (normally 20 seconds); an expired or
-failed confirmation is **unknown**, even when the last successful reply said ON
-or OFF. Temperatures and confirmations show their ages. ESP32 serial activity and
-periodic controller status become **stale** after 10 seconds without new input.
-
-Every run writes the existing control CSV and a sibling
-`<csv-stem>.serial.jsonl` file containing all serial lines, including warnings
-and records that the monitor cannot parse. Both files are flushed as data arrives.
-If the LED turns red, check the browser's fault reason and recent diagnostics,
-then search the capture for `state,`, `actuator,`, `failed`, and `WARN`. Keep the
-capture from before resetting the ESP32; a reset clears its current fault state.
-
-## Real control smoke test
-
-`real-control-test` reads the ESP32 temperature bridge and drives the Tasmota plug from the real box-air temperature.
-
-For this control test, `box_air` drives the normal heater decision. `room_air` is logged as ambient context. `product` is logged and used as a hard safety cutoff when available.
-
-It writes the control log to stdout and to a CSV file:
-
-```bash
-cargo run -p tempeh-host -- real-control-test /dev/cu.usbmodem1234561 http://192.0.2.10
-```
-
-Default output (timestamped so runs do not overwrite each other):
-
-```text
-out/real-control-test-20260529-205812.csv
-```
-
-Use a named file for a supervised heat-mat run:
-
-```bash
-cargo run -p tempeh-host -- real-control-test /dev/cu.usbmodem1234561 http://192.0.2.10 out/heat-mat-empty-box-01.csv
-```
-
-## Live real control UI
-
-`real-control-live` runs the same supervised host control loop as `real-control-test`, writes the same CSV log, and serves a local live chart:
-
-```bash
-cargo run -p tempeh-host -- real-control-live /dev/cu.usbmodem1234561 http://192.0.2.10
-```
-
-Open:
-
-```text
-http://127.0.0.1:8787
-```
-
-Press Ctrl-C to stop. The command will try to leave the plug off before exiting.
-
-## Real thermometer smoke test
-
-`thermometer-test` reads labelled temperature lines from stdin or a serial port.
-
-Current ESP32 firmware output:
-
-```
-temp,box_air,22.437
-temp,room_air,20.125
-temp,product,23.125
-```
-
-Use stdin for parser testing:
-
-```bash
-printf "temp,box_air,22.4\ntemp,room_air,20.2\ntemp,product,23.1\n" | cargo run -p tempeh-host -- thermometer-test -
-```
-
-Use a serial port for the ESP32 temperature bridge:
-
-```bash
-cargo run -p tempeh-host -- thermometer-test /dev/ttyUSB0
-cargo run -p tempeh-host -- thermometer-test /dev/ttyACM0
-cargo run -p tempeh-host -- thermometer-test /dev/cu.usbmodem1234561
-```
-
-Expected CSV output:
-
-```text
-time_s,room_air_temp_c,box_air_temp_c,product_temp_c
-1,20.125,22.437,23.125
-```
-
-Older thermometer logs may use a `tempeh_core_temp_c` column name for the same probe reading.
-
-## Serial ports
-
-List available serial ports to help find the ESP32:
+The ESP32 controls heating locally. A connected laptop can display its serial
+telemetry without taking over control:
 
 ```bash
 cargo run -p tempeh-host -- ports
+cargo run -p tempeh-host -- monitor /dev/cu.usbmodem1234561
 ```
 
-The command prints USB metadata where available and marks ports that look like likely ESP32 devices.
+Open <http://127.0.0.1:8787>. Generic read-only MQTT telemetry is also
+available through [MQTT Explorer](docs/mqtt-explorer.md); Home Assistant is an
+optional separate integration. A laptop only observes the controller. It does
+not participate in the heating safety path.
 
-The command prints CSV snapshots with the latest known box-air, room-air, and product temperatures. The product column is blank until the product probe has emitted at least one valid reading.
-It does not control the heater.
+The dashboard shows controller faults, reading ages and heat requested separately
+from the last Tasmota plug confirmation. It also saves a complete serial log for
+troubleshooting. See [monitoring and serial evidence](docs/development.md#monitor-faults-and-keep-serial-evidence)
+for confirmation limits, log files and replay instructions.
 
-## Pet mode
+Monitoring is optional and must never be treated as part of the heater safety
+path.
 
-`pet` turns the latest simulation state into a mycelial status report:
+## Development
 
-It includes a batch diary that narrates major milestones such as warm-up, metabolic heat, heat risk, and readiness.
-
-```bash
-cargo run -p tempeh-host -- pet
-```
-
-## Test
+Simulation, host-actuated experiments, firmware build details and repository
+structure are documented in [the development guide](docs/development.md). The
+older laptop-driven control route is retained for controlled engineering work;
+it is not the recommended way to incubate tempeh.
 
 ```bash
 cargo test

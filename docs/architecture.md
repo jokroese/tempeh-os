@@ -127,9 +127,10 @@ This crate currently:
 
 ## Current control boundary
 
-There are two available control paths.
+The autonomous firmware-evaluated path is the product direction. The older
+host-actuated path remains only for controlled engineering experiments.
 
-### Host-actuated control
+### Legacy host-actuated experiments
 
 ```text
 ESP32 probes
@@ -139,9 +140,11 @@ ESP32 probes
   -> Tasmota HTTP plug command
 ```
 
-This remains useful for host-driven experiments.
+This remains useful for deliberate host-driven experiments. It is not the
+recommended incubation path and must not run concurrently with autonomous
+actuation.
 
-### Firmware-evaluated control
+### Primary autonomous control
 
 ```text
 ESP32 probes and button
@@ -149,7 +152,9 @@ ESP32 probes and button
   -> renewable Tasmota HTTP lease
 ```
 
-This path is laptop-independent. The serial records distinguish desired heat from the relay state confirmed by Tasmota.
+This path is laptop-independent. The serial records distinguish desired heat
+from the relay state confirmed by Tasmota. Optional serial and MQTT consumers
+are read-only observers.
 
 ## Safety invariants
 
