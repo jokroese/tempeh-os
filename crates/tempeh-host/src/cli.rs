@@ -25,7 +25,7 @@ const DEFAULT_SERIAL_BAUD: u32 = 115_200;
 const DEFAULT_LIVE_ADDR: &str = "127.0.0.1:8787";
 
 pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let command = env::args().nth(1).unwrap_or_else(|| "html".to_string());
+    let command = env::args().nth(1).unwrap_or_else(|| "help".to_string());
     let config = SimConfig::default();
     let samples = run_closed_loop_simulation(config);
 
@@ -48,18 +48,22 @@ pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
             print_pet_report(&samples, &config);
         }
         "plug-test" => {
+            print_legacy_actuation_warning();
             run_plug_test(env::args().nth(2))?;
         }
         "trace-control-test" => {
+            print_legacy_actuation_warning();
             run_trace_control_test(env::args().nth(2))?;
         }
         "thermometer-test" => {
             run_thermometer_test(env::args().nth(2))?;
         }
         "real-control-test" => {
+            print_legacy_actuation_warning();
             run_real_control_test(env::args().nth(2), env::args().nth(3), env::args().nth(4))?;
         }
         "real-control-live" => {
+            print_legacy_actuation_warning();
             run_real_control_live(env::args().nth(2), env::args().nth(3), env::args().nth(4))?;
         }
         "monitor" | "monitor-live" => {
@@ -81,8 +85,13 @@ pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
 
 fn print_help() {
     eprintln!(
-        "Usage:\n  cargo run -p tempeh-host -- html                                   # write out/sim.html\n  cargo run -p tempeh-host -- csv                                    # print simulation CSV\n  cargo run -p tempeh-host -- control                                # print simulated control-loop CSV\n  cargo run -p tempeh-host -- pet                                    # print the mycelial pet status\n  cargo run -p tempeh-host -- ports                                  # recommend likely ESP32 serial port\n  cargo run -p tempeh-host -- ports --all                            # list all available serial ports\n  cargo run -p tempeh-host -- plug-test <url>                        # turn Tasmota plug on, wait, turn off\n  cargo run -p tempeh-host -- trace-control-test <url>               # drive Tasmota plug from a short fake temperature trace\n  cargo run -p tempeh-host -- thermometer-test <port|->              # read labelled temperature lines from serial or stdin\n  cargo run -p tempeh-host -- real-control-test <port> <url> [csv]   # read real probe, drive plug, save CSV\n  cargo run -p tempeh-host -- real-control-live <port> <url> [csv]   # real control plus live web UI\n  cargo run -p tempeh-host -- monitor <port|-> [csv]                 # watch faults and temperatures, save CSV and serial evidence\n\nShortcuts:\n  just monitor <port> [csv]\n\nEnvironment:\n  TEMPEH_TASMOTA_URL=http://192.168.1.50"
+        "Tempeh OS host tools\n\nThe ESP32 firmware is the primary heater controller. These host tools are optional.\n\nAutonomous setup and monitoring:\n  cargo run -p tempeh-host -- ports                                  # recommend likely ESP32 serial port\n  cargo run -p tempeh-host -- ports --all                            # list all available serial ports\n  cargo run -p tempeh-host -- thermometer-test <port|->              # read temperatures; never control heat\n  cargo run -p tempeh-host -- monitor <port|-> [csv]                 # read-only faults and temperatures; save CSV and serial evidence\n\nSimulation only:\n  cargo run -p tempeh-host -- html                                   # write out/sim.html\n  cargo run -p tempeh-host -- csv                                    # print simulation CSV\n  cargo run -p tempeh-host -- control                                # print simulated control-loop CSV\n  cargo run -p tempeh-host -- pet                                    # print simulated mycelial status\n\nLegacy host actuation — engineering use only:\n  cargo run -p tempeh-host -- plug-test <url>                        # physically toggle the Tasmota plug\n  cargo run -p tempeh-host -- trace-control-test <url>               # drive the plug from fake readings\n  cargo run -p tempeh-host -- real-control-test <port> <url> [csv]   # drive the plug from serial temperatures\n  cargo run -p tempeh-host -- real-control-live <port> <url> [csv]   # legacy actuation plus live UI\n\nDo not run host actuation concurrently with the autonomous controller.\nSee docs/getting-started.md for the supported user journey.\n\nShortcut:\n  just monitor <port> [csv]\n\nLegacy host-actuation environment:\n  TEMPEH_TASMOTA_URL=http://192.168.1.50"
     );
+}
+
+fn print_legacy_actuation_warning() {
+    eprintln!("WARNING: this legacy engineering command can physically actuate the plug.");
+    eprintln!("Do not run it concurrently with the autonomous ESP32 controller.");
 }
 
 fn print_control_csv(readings: &[ControlReading]) {
@@ -819,7 +828,7 @@ fn run_thermometer_test(source_arg: Option<String>) -> Result<(), Box<dyn std::e
     eprintln!("Reading temperatures from {source} at {DEFAULT_SERIAL_BAUD} baud.");
     eprintln!("Expected lines from current firmware: temp,box_air,22.437 and temp,room_air,20.125");
     eprintln!("If you see ESP-IDF example logs instead, flash crates/tempeh-firmware-esp32 first.");
-    eprintln!("Press Ctrl-C to stop.");
+    eprintln!("Press Ctrl-C to stop monitoring; the ESP32 continues controlling heat.");
     read_temperature_lines(BufReader::new(port))
 }
 
@@ -1096,8 +1105,8 @@ fn run_monitor_live(
         capture.path().display()
     );
     eprintln!("Live UI: http://{addr}");
-    eprintln!("No heater control is active in monitor mode.");
-    eprintln!("Press Ctrl-C to stop.");
+    eprintln!("This host monitor is read-only; heater control remains on the ESP32.");
+    eprintln!("Press Ctrl-C to stop monitoring; the ESP32 continues controlling heat.");
 
     // Give the server thread a chance to fail fast on bind errors.
     thread::sleep(Duration::from_millis(100));
